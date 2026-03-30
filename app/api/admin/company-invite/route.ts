@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createServiceRoleClient } from "@/lib/supabaseServiceRole";
+import { isRestrictedSuperAdminRoleName } from "@/lib/restrictedRoles";
 
 type Body = {
   companyId: string;
@@ -27,7 +28,7 @@ function getSiteUrl(request: Request): string {
 async function assertCallerCanManageCompanyInvites(
   accessToken: string,
   companyId: string
-): Promise<{ userId: string } | null> {
+): Promise<{ userId: string; isApplicationSuperAdmin: boolean } | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anon) return null;
@@ -45,7 +46,8 @@ async function assertCallerCanManageCompanyInvites(
     .select("is_super_admin")
     .eq("id", got.user.id)
     .maybeSingle();
-  if (profile?.is_super_admin === true) return { userId: got.user.id };
+  if (profile?.is_super_admin === true)
+    return { userId: got.user.id, isApplicationSuperAdmin: true };
 
   const { data: mem } = await admin
     .from("company_memberships")
@@ -55,7 +57,7 @@ async function assertCallerCanManageCompanyInvites(
     .eq("is_active", true)
     .maybeSingle();
   if (!mem) return null;
-  return { userId: got.user.id };
+  return { userId: got.user.id, isApplicationSuperAdmin: false };
 }
 
 async function validateRoleIdsForCompany(
@@ -176,6 +178,15 @@ export async function POST(request: Request) {
   if (roleIds && roleIds.length > 0) {
     const v = await validateRoleIdsForCompany(admin, companyId, roleIds);
     if (!v.ok) return NextResponse.json({ error: v.message }, { status: 400 });
+    if (!caller.isApplicationSuperAdmin) {
+      const { data: named } = await admin.from("roles").select("name").in("id", roleIds);
+      if (named?.some((r) => isRestrictedSuperAdminRoleName(r.name))) {
+        return NextResponse.json(
+          { error: "Only application super admins can assign the Super Admin role." },
+          { status: 403 }
+        );
+      }
+    }
   }
 
   const normalizedEmail = email.trim().toLowerCase();

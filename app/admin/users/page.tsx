@@ -1,9 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { isRestrictedSuperAdminRoleName } from "@/lib/restrictedRoles";
 
 type Profile = {
   id: string;
@@ -52,6 +54,15 @@ export default function AdminUsersPage() {
   const [editingMembershipId, setEditingMembershipId] = useState<string | null>(null);
   const [editRoleIds, setEditRoleIds] = useState<string[]>([]);
   const [savingRoles, setSavingRoles] = useState(false);
+  const [isApplicationSuperAdmin, setIsApplicationSuperAdmin] = useState(false);
+
+  const assignableRoles = useMemo(
+    () =>
+      companyRoles.filter(
+        (r) => isApplicationSuperAdmin || !isRestrictedSuperAdminRoleName(r.name)
+      ),
+    [companyRoles, isApplicationSuperAdmin]
+  );
 
   useEffect(() => {
     const active = loadActiveCompany();
@@ -63,6 +74,9 @@ export default function AdminUsersPage() {
     setCompanyName(active.name);
     loadMemberships(active.id);
     loadCompanyRoles(active.id);
+    void getCurrentUserPermissions(null).then(({ isSuperAdmin }) => {
+      setIsApplicationSuperAdmin(isSuperAdmin);
+    });
   }, []);
 
   async function loadMemberships(companyId: string) {
@@ -171,17 +185,40 @@ export default function AdminUsersPage() {
 
   function openEditRoles(m: Membership & { roles: UserRole[] }) {
     setEditingMembershipId(m.id);
-    setEditRoleIds(m.roles.map((r) => r.role_id));
+    const assigned = m.roles.map((r) => r.role_id);
+    if (isApplicationSuperAdmin) {
+      setEditRoleIds(assigned);
+      return;
+    }
+    const assignableIds = new Set(assignableRoles.map((r) => r.id));
+    setEditRoleIds(assigned.filter((id) => assignableIds.has(id)));
   }
 
   async function saveRoles(e: FormEvent) {
     e.preventDefault();
     if (!editingMembershipId) return;
     setSavingRoles(true);
+
+    let finalRoleIds = [...editRoleIds];
+    if (!isApplicationSuperAdmin) {
+      const { data: existing } = await supabase
+        .from("user_company_roles")
+        .select("role_id, roles(name)")
+        .eq("membership_id", editingMembershipId);
+      const restrictedKept = (existing ?? [])
+        .filter((row) =>
+          isRestrictedSuperAdminRoleName(
+            (row as { roles: { name: string } | null }).roles?.name ?? ""
+          )
+        )
+        .map((row) => (row as { role_id: string }).role_id);
+      finalRoleIds = [...new Set([...editRoleIds, ...restrictedKept])];
+    }
+
     await supabase.from("user_company_roles").delete().eq("membership_id", editingMembershipId);
-    if (editRoleIds.length > 0) {
+    if (finalRoleIds.length > 0) {
       await supabase.from("user_company_roles").insert(
-        editRoleIds.map((role_id) => ({ membership_id: editingMembershipId, role_id }))
+        finalRoleIds.map((role_id) => ({ membership_id: editingMembershipId, role_id }))
       );
     }
     setSavingRoles(false);
@@ -307,11 +344,11 @@ export default function AdminUsersPage() {
             </>
           )}
 
-          {companyRoles.length > 0 && (
+          {assignableRoles.length > 0 && (
             <div>
               <span className="block text-xs text-slate-500 mb-1">Initial roles (optional)</span>
               <div className="flex flex-wrap gap-2">
-                {companyRoles.map((r) => (
+                {assignableRoles.map((r) => (
                   <label key={r.id} className="flex items-center gap-1 text-xs text-slate-300">
                     <input
                       type="checkbox"
@@ -365,17 +402,28 @@ export default function AdminUsersPage() {
                 </td>
                 <td className="py-2 pr-3 text-slate-400">
                   {editingMembershipId === m.id ? (
-                    <form onSubmit={saveRoles} className="flex flex-wrap gap-2 items-center">
-                      {companyRoles.map((r) => (
-                        <label key={r.id} className="flex items-center gap-1 text-xs">
-                          <input
-                            type="checkbox"
-                            checked={editRoleIds.includes(r.id)}
-                            onChange={() => toggleEditRole(r.id)}
-                          />
-                          {r.name}
-                        </label>
-                      ))}
+                    <form onSubmit={saveRoles} className="flex flex-col gap-2 items-start">
+                      <div className="flex flex-wrap gap-2 items-center">
+                        {assignableRoles.map((r) => (
+                          <label key={r.id} className="flex items-center gap-1 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={editRoleIds.includes(r.id)}
+                              onChange={() => toggleEditRole(r.id)}
+                            />
+                            {r.name}
+                          </label>
+                        ))}
+                      </div>
+                      {!isApplicationSuperAdmin &&
+                        (m.roles ?? []).some((ur) =>
+                          isRestrictedSuperAdminRoleName(ur.roles?.name ?? "")
+                        ) && (
+                          <p className="text-[10px] text-slate-500">
+                            This user also has restricted roles (e.g. Super Admin). Only an application
+                            super admin can add or remove those.
+                          </p>
+                        )}
                       <button
                         type="submit"
                         disabled={savingRoles}

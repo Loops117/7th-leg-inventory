@@ -163,12 +163,9 @@ export async function POST(request: Request) {
     admin = createServiceRoleClient();
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Server misconfiguration";
-    return NextResponse.json(
-      {
-        error: `${msg}. Add SUPABASE_SERVICE_ROLE_KEY to your environment (server-only, never expose to the client).`,
-      },
-      { status: 503 }
-    );
+    const hint =
+      " For invites/admin user creation, add SUPABASE_SERVICE_ROLE_KEY (Supabase → Project Settings → API → service_role) in Vercel env without NEXT_PUBLIC_. Ensure NEXT_PUBLIC_SUPABASE_URL is set for the server too.";
+    return NextResponse.json({ error: `${msg} ${hint}` }, { status: 503 });
   }
 
   const caller = await assertCallerCanManageCompanyInvites(accessToken, companyId);

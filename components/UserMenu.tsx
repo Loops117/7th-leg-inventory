@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
 
 type UserInfo = {
@@ -16,25 +17,28 @@ export function UserMenu() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function loadUser() {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user) {
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-
-      setUser({
-        id: data.user.id,
-        email: data.user.email ?? undefined,
-        full_name:
-          (data.user.user_metadata as any)?.full_name ??
-          (data.user.user_metadata as any)?.name,
-      });
-      setLoading(false);
+    function mapUser(u: User) {
+      const meta = u.user_metadata as { full_name?: string; name?: string } | undefined;
+      return {
+        id: u.id,
+        email: u.email ?? undefined,
+        full_name: meta?.full_name ?? meta?.name,
+      };
     }
 
-    loadUser();
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ? mapUser(session.user) : null);
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ? mapUser(session.user) : null);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   if (loading) {

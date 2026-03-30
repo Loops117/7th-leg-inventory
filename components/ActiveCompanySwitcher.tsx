@@ -25,12 +25,18 @@ export function ActiveCompanySwitcher() {
   const [loggedIn, setLoggedIn] = useState(false);
 
   useEffect(() => {
-    async function init() {
+    let cancelled = false;
+
+    async function loadCompaniesForSession() {
       setLoading(true);
 
       const { data: sessionData } = await supabase.auth.getSession();
+      if (cancelled) return;
+
       if (!sessionData.session) {
         setLoggedIn(false);
+        setCompanies([]);
+        setActiveCompany(null);
         setLoading(false);
         return;
       }
@@ -41,6 +47,8 @@ export function ActiveCompanySwitcher() {
         .select("id, name, is_active")
         .order("name");
 
+      if (cancelled) return;
+
       if (error || !data) {
         setCompanies([]);
         setLoading(false);
@@ -49,7 +57,6 @@ export function ActiveCompanySwitcher() {
 
       setCompanies(data);
 
-      // Restore from local storage if still valid
       const stored = loadActiveCompany();
       if (stored && data.some((c) => c.id === stored.id)) {
         setActiveCompany(stored);
@@ -57,7 +64,6 @@ export function ActiveCompanySwitcher() {
         return;
       }
 
-      // If only one company, auto-select it
       if (data.length === 1) {
         const single = { id: data[0].id, name: data[0].name };
         setActiveCompany(single);
@@ -67,18 +73,28 @@ export function ActiveCompanySwitcher() {
       setLoading(false);
     }
 
-    init();
+    void loadCompaniesForSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) void loadCompaniesForSession();
+      else {
+        setLoggedIn(false);
+        setCompanies([]);
+        setActiveCompany(null);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   if (!loggedIn) {
-    return (
-      <a
-        href="/login"
-        className="text-xs text-slate-300 hover:text-emerald-400"
-      >
-        Log in
-      </a>
-    );
+    return null;
   }
 
   if (loading) {

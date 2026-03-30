@@ -26,7 +26,7 @@ export default function LoginPage() {
     if (error) {
       setError(error.message);
     } else {
-      // On success, go to companies page
+      router.refresh();
       router.push("/companies");
     }
   }

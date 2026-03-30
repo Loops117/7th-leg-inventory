@@ -304,8 +304,9 @@ export default function ImportPage() {
       if (!warehouseId) {
         const { data: existing } = await supabase.from("warehouses").select("id").eq("company_id", activeCompanyId).eq("code", whCode).maybeSingle();
         if (existing?.id) {
-          warehouseId = existing.id;
-          whByCode.set(whCode, warehouseId);
+          const wid = existing.id;
+          warehouseId = wid;
+          whByCode.set(whCode, wid);
         } else {
           const { data: wh, error: insertErr } = await supabase.from("warehouses").insert({ company_id: activeCompanyId, code: whCode, name: (o.warehouse_name ?? "").trim() || null }).select("id").single();
           if (insertErr) {
@@ -322,8 +323,9 @@ export default function ImportPage() {
       if (!sectionId) {
         const { data: existing } = await supabase.from("sections").select("id").eq("warehouse_id", warehouseId).eq("code", secCode).maybeSingle();
         if (existing?.id) {
-          sectionId = existing.id;
-          secByKey.set(secKey, sectionId);
+          const sid = existing.id;
+          sectionId = sid;
+          secByKey.set(secKey, sid);
         } else {
           const { data: sec, error: insertErr } = await supabase.from("sections").insert({ warehouse_id: warehouseId, code: secCode, name: (o.section_name ?? "").trim() || null }).select("id").single();
           if (insertErr) {
@@ -340,8 +342,9 @@ export default function ImportPage() {
       if (!rackId) {
         const { data: existing } = await supabase.from("racks").select("id").eq("section_id", sectionId).eq("code", rackCode).maybeSingle();
         if (existing?.id) {
-          rackId = existing.id;
-          rackByKey.set(rackKey, rackId);
+          const rid = existing.id;
+          rackId = rid;
+          rackByKey.set(rackKey, rid);
         } else {
           const { data: r, error: insertErr } = await supabase.from("racks").insert({ section_id: sectionId, code: rackCode, name: (o.rack_name ?? "").trim() || null }).select("id").single();
           if (insertErr) {
@@ -358,8 +361,9 @@ export default function ImportPage() {
       if (!shelfId) {
         const { data: existing } = await supabase.from("shelves").select("id").eq("rack_id", rackId).eq("code", shelfCode).maybeSingle();
         if (existing?.id) {
-          shelfId = existing.id;
-          shelfByKey.set(shelfKey, shelfId);
+          const shid = existing.id;
+          shelfId = shid;
+          shelfByKey.set(shelfKey, shid);
         } else {
           const { data: sh, error: insertErr } = await supabase.from("shelves").insert({ rack_id: rackId, code: shelfCode, name: (o.shelf_name ?? "").trim() || null }).select("id").single();
           if (insertErr) {

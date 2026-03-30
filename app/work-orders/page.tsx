@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Database } from "@/types/supabase";
 import { supabase } from "@/lib/supabaseClient";
@@ -18,7 +18,7 @@ type AssignmentWithRelations = WorkOrderAssignment & {
   assignee_profile: Pick<Profile, "id" | "full_name" | "email"> | null;
 };
 
-export default function WorkOrdersPage() {
+function WorkOrdersPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [assignments, setAssignments] = useState<AssignmentWithRelations[]>([]);
@@ -2456,6 +2456,18 @@ export default function WorkOrdersPage() {
       )}
 
     </div>
+  );
+}
+
+export default function WorkOrdersPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-4 text-sm text-slate-400">Loading work orders…</div>
+      }
+    >
+      <WorkOrdersPageContent />
+    </Suspense>
   );
 }
 

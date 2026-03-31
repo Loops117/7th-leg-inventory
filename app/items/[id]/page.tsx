@@ -26,7 +26,16 @@ type Item = {
   item_type: string;
   sale_price: number | null;
   manual_unit_cost: number | null;
+  is_catalog_item: boolean;
+  item_category_id?: string | null;
+  item_type_id?: string | null;
+  item_categories?: { name: string } | null;
+  item_types?: { name: string; track_inventory?: boolean } | null;
 };
+
+type ItemCategory = { id: string; name: string };
+type ProductType = { id: string; name: string; track_inventory: boolean };
+type CategoryType = { category_id: string; type_id: string };
 
 type BuyingOption = {
   id: string;
@@ -245,6 +254,14 @@ export default function ItemDetailPage() {
   const [manualCostEdit, setManualCostEdit] = useState("");
   const [savingManualCost, setSavingManualCost] = useState(false);
   const [showManualCostModal, setShowManualCostModal] = useState(false);
+  const [savingCatalogFlag, setSavingCatalogFlag] = useState(false);
+  const [categories, setCategories] = useState<ItemCategory[]>([]);
+  const [productTypes, setProductTypes] = useState<ProductType[]>([]);
+  const [categoryTypes, setCategoryTypes] = useState<CategoryType[]>([]);
+  const [editingCategoryType, setEditingCategoryType] = useState(false);
+  const [categoryIdEdit, setCategoryIdEdit] = useState("");
+  const [typeIdEdit, setTypeIdEdit] = useState("");
+  const [savingCategoryType, setSavingCategoryType] = useState(false);
 
   // Adjust inventory (per location)
   const [adjustingLocationId, setAdjustingLocationId] = useState<string | null>(null);
@@ -410,7 +427,7 @@ export default function ItemDetailPage() {
     const { data: itemData, error: itemErr } = await supabase
       .from("items")
       .select(
-        "id, company_id, sku, name, description, item_type, sale_price, manual_unit_cost",
+        "id, company_id, sku, name, description, item_type, sale_price, manual_unit_cost, is_catalog_item, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)",
       )
       .eq("id", itemId)
       .single();
@@ -426,6 +443,27 @@ export default function ItemDetailPage() {
     setSalePriceEdit(
       itemData.sale_price != null ? String(itemData.sale_price) : ""
     );
+    setCategoryIdEdit(itemData.item_category_id ?? "");
+    setTypeIdEdit(itemData.item_type_id ?? "");
+    setEditingCategoryType(false);
+
+    const [catRes, typeRes, ctRes] = await Promise.all([
+      supabase
+        .from("item_categories")
+        .select("id, name")
+        .eq("company_id", itemData.company_id)
+        .eq("is_active", true)
+        .order("name"),
+      supabase
+        .from("item_types")
+        .select("id, name, track_inventory")
+        .eq("company_id", itemData.company_id)
+        .order("name"),
+      supabase.from("item_category_types").select("category_id, type_id"),
+    ]);
+    setCategories((catRes.data ?? []) as ItemCategory[]);
+    setProductTypes((typeRes.data ?? []) as ProductType[]);
+    setCategoryTypes((ctRes.data ?? []) as CategoryType[]);
 
     const { data: opts } = await supabase
       .from("item_buying_options")
@@ -925,6 +963,57 @@ export default function ItemDetailPage() {
     setSavingSalePrice(false);
   }
 
+  async function handleToggleCatalogItem(next: boolean) {
+    if (!item) return;
+    setSavingCatalogFlag(true);
+    setError(null);
+    const { error: updErr } = await supabase
+      .from("items")
+      .update({ is_catalog_item: next })
+      .eq("id", item.id);
+    if (updErr) setError(updErr.message);
+    else setItem((prev) => (prev ? { ...prev, is_catalog_item: next } : prev));
+    setSavingCatalogFlag(false);
+  }
+
+  async function handleSaveCategoryType() {
+    if (!item) return;
+    if (!categoryIdEdit || !typeIdEdit) {
+      setError("Select both category and type.");
+      return;
+    }
+    setSavingCategoryType(true);
+    setError(null);
+    const { error: updErr } = await supabase
+      .from("items")
+      .update({ item_category_id: categoryIdEdit, item_type_id: typeIdEdit })
+      .eq("id", item.id);
+    if (updErr) {
+      setError(updErr.message);
+      setSavingCategoryType(false);
+      return;
+    }
+    setItem((prev) =>
+      prev
+        ? {
+            ...prev,
+            item_category_id: categoryIdEdit,
+            item_type_id: typeIdEdit,
+            item_categories: {
+              name: categories.find((c) => c.id === categoryIdEdit)?.name ?? "—",
+            },
+            item_types: {
+              name: productTypes.find((t) => t.id === typeIdEdit)?.name ?? "—",
+              track_inventory:
+                productTypes.find((t) => t.id === typeIdEdit)?.track_inventory ?? true,
+            },
+          }
+        : prev
+    );
+    setEditingCategoryType(false);
+    setSavingCategoryType(false);
+  }
+
   function openAddOption() {
     setEditingOptionId(null);
     setShowAddOptionForm(true);
@@ -1098,6 +1187,7 @@ export default function ItemDetailPage() {
         description: item.description,
         item_type: item.item_type,
         sale_price: item.sale_price,
+        is_catalog_item: item.is_catalog_item ?? false,
       })
       .select("id")
       .single();
@@ -1144,6 +1234,15 @@ export default function ItemDetailPage() {
   if (!item) return null;
 
   const defaultOption = buyingOptions.find((o) => o.is_default) ?? buyingOptions[0];
+  const tracksInventory = item.item_types?.track_inventory !== false;
+  const typeIdsInCategory = categoryIdEdit
+    ? categoryTypes
+        .filter((ct) => ct.category_id === categoryIdEdit)
+        .map((ct) => ct.type_id)
+    : [];
+  const typesForCategory = productTypes.filter((t) =>
+    typeIdsInCategory.includes(t.id)
+  );
   const totalOnHand = inventoryByLocation.reduce(
     (sum, b) => sum + Number(b.on_hand_qty ?? 0),
     0,
@@ -1160,7 +1259,9 @@ export default function ItemDetailPage() {
           {companyName && (
             <p className="text-xs text-slate-500">Company: {companyName}</p>
           )}
-          <p className="text-xs text-slate-500 capitalize">{item.item_type}</p>
+          <p className="text-xs text-slate-500">
+            {tracksInventory ? "Inventory-tracked type" : "Non-inventory type"}
+          </p>
         </div>
         <div className="flex flex-col items-end gap-2">
           <button
@@ -1233,6 +1334,105 @@ export default function ItemDetailPage() {
                 </button>
               </div>
 
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={Boolean(item.is_catalog_item)}
+                  onChange={(e) => void handleToggleCatalogItem(e.target.checked)}
+                  disabled={savingCatalogFlag}
+                />
+                Catalog item (listed for sale, not necessarily stocked)
+              </label>
+
+              {!editingCategoryType ? (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-800 bg-slate-950/40 px-2 py-1.5">
+                  <div className="flex min-w-0 max-w-[min(100%,16rem)] items-center gap-1.5">
+                    <span className="shrink-0 text-[11px] text-slate-500">
+                      Category
+                    </span>
+                    <span className="truncate text-sm text-slate-200">
+                      {item.item_categories?.name ?? "—"}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 max-w-[min(100%,16rem)] items-center gap-1.5">
+                    <span className="shrink-0 text-[11px] text-slate-500">Type</span>
+                    <span className="truncate text-sm text-slate-200">
+                      {item.item_types?.name ?? "—"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingCategoryType(true)}
+                    className="ml-auto shrink-0 rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-800"
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2 rounded border border-slate-800 bg-slate-950/40 px-2 py-1.5">
+                  <label className="flex min-w-[8rem] flex-1 items-center gap-1.5 text-[11px] text-slate-500 sm:min-w-[10rem]">
+                    <span className="shrink-0">Category</span>
+                    <select
+                      value={categoryIdEdit}
+                      onChange={(e) => {
+                        const nextCategoryId = e.target.value;
+                        setCategoryIdEdit(nextCategoryId);
+                        const nextAllowedTypeIds = categoryTypes
+                          .filter((ct) => ct.category_id === nextCategoryId)
+                          .map((ct) => ct.type_id);
+                        if (!nextAllowedTypeIds.includes(typeIdEdit)) {
+                          setTypeIdEdit(nextAllowedTypeIds[0] ?? "");
+                        }
+                      }}
+                      className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs text-slate-100"
+                    >
+                      <option value="">Select…</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex min-w-[8rem] flex-1 items-center gap-1.5 text-[11px] text-slate-500 sm:min-w-[10rem]">
+                    <span className="shrink-0">Type</span>
+                    <select
+                      value={typeIdEdit}
+                      onChange={(e) => setTypeIdEdit(e.target.value)}
+                      className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs text-slate-100"
+                    >
+                      <option value="">Select…</option>
+                      {typesForCategory.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="ml-auto flex shrink-0 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveCategoryType()}
+                      disabled={savingCategoryType}
+                      className="rounded bg-emerald-600 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      {savingCategoryType ? "Saving..." : "Save"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCategoryType(false);
+                        setCategoryIdEdit(item.item_category_id ?? "");
+                        setTypeIdEdit(item.item_type_id ?? "");
+                      }}
+                      className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1">
                   <label className="block text-xs text-slate-500 mb-0.5">
@@ -1274,16 +1474,16 @@ export default function ItemDetailPage() {
               <div className="flex-1 min-w-[180px] rounded border border-slate-800 bg-slate-950/40 p-3 space-y-1">
                 <div>
                   <span className="block text-xs text-slate-500">Total on hand</span>
-                  <p className="mt-1 text-lg font-medium text-slate-100">{totalOnHand}</p>
+                  <p className="mt-1 text-lg font-medium text-slate-100">{tracksInventory ? totalOnHand : "—"}</p>
                 </div>
                 <div className="mt-1 text-[11px] text-slate-400">
                   <span>Total locations: </span>
                   <span className="font-medium text-slate-100">
-                    {itemLocations.length}
+                    {tracksInventory ? itemLocations.length : 0}
                   </span>
                   <span className="ml-3">Incoming qty: </span>
                   <span className="font-medium text-slate-100">
-                    {incomingQty}
+                    {tracksInventory ? incomingQty : "—"}
                   </span>
                 </div>
               </div>
@@ -1488,6 +1688,7 @@ export default function ItemDetailPage() {
       )}
 
       {/* Locations */}
+      {tracksInventory && (
       <section className="rounded border border-slate-800 bg-slate-900/50">
         <header className="flex items-center justify-between px-4 py-2 border-b border-slate-800">
           <h2 className="text-sm font-semibold text-slate-200">Locations</h2>
@@ -1599,9 +1800,10 @@ export default function ItemDetailPage() {
           </div>
         )}
       </section>
+      )}
 
       {/* Adjust inventory modal */}
-      {adjustingLocationId && item && (
+      {tracksInventory && adjustingLocationId && item && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-sm rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-xl">
             <h3 className="text-sm font-semibold text-slate-200 mb-2">Adjust inventory</h3>
@@ -1841,6 +2043,7 @@ export default function ItemDetailPage() {
       </section>
 
       {/* Recent purchases / cost breakdown */}
+      {tracksInventory && (
       <section className="rounded border border-slate-800 bg-slate-900/50">
         <header className="flex items-center justify-between px-4 py-2 border-b border-slate-800">
           <h2 className="text-sm font-semibold text-slate-200">
@@ -1903,6 +2106,7 @@ export default function ItemDetailPage() {
           </div>
         )}
       </section>
+      )}
 
       {/* BOM / Kitting */}
       <section className="rounded border border-slate-800 bg-slate-900/50">

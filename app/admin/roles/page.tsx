@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
+import { PERMISSION_GROUPS } from "@/lib/permissionCatalog";
 
 type Role = {
   id: string;
@@ -33,6 +34,13 @@ export default function AdminRolesPage() {
   const [formDesc, setFormDesc] = useState("");
   const [formPermIds, setFormPermIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+
+  const permissionByCode = new Map(permissions.map((p) => [p.code, p]));
+  const groupedCodes = new Set(PERMISSION_GROUPS.flatMap((g) => g.permissions.map((p) => p.code)));
+  const ungroupedPermissions = permissions.filter(
+    (p) => !groupedCodes.has(p.code) && p.code !== "manage_companies"
+  );
 
   useEffect(() => {
     const active = loadActiveCompany();
@@ -47,7 +55,10 @@ export default function AdminRolesPage() {
   }, []);
 
   async function loadPermissions() {
-    const { data } = await supabase.from("permissions").select("id, code, description").eq("is_active", true).order("code");
+    const { data } = await supabase
+      .from("permissions")
+      .select("id, code, description")
+      .order("code");
     setPermissions(data ?? []);
   }
 
@@ -79,14 +90,15 @@ export default function AdminRolesPage() {
     setFormName("");
     setFormDesc("");
     setFormPermIds([]);
+    setShowForm(true);
   }
 
   function openEdit(role: Role) {
-    if (role.is_system && role.company_id === null) return;
     setEditingId(role.id);
     setFormName(role.name);
     setFormDesc(role.description ?? "");
     setFormPermIds(rolePerms[role.id] ?? []);
+    setShowForm(true);
   }
 
   async function handleSave(e: FormEvent) {
@@ -113,13 +125,37 @@ export default function AdminRolesPage() {
     }
     setSaving(false);
     setEditingId(null);
+    setShowForm(false);
     if (activeCompanyId) loadRoles(activeCompanyId);
   }
 
   async function handleDelete(role: Role) {
     if (role.is_system && role.company_id === null) return;
     if (!confirm(`Delete role "${role.name}"?`)) return;
-    await supabase.from("roles").delete().eq("id", role.id);
+    setError(null);
+    const { error: rpErr } = await supabase
+      .from("role_permissions")
+      .delete()
+      .eq("role_id", role.id);
+    if (rpErr) {
+      setError(rpErr.message);
+      return;
+    }
+
+    const { error: ucrErr } = await supabase
+      .from("user_company_roles")
+      .delete()
+      .eq("role_id", role.id);
+    if (ucrErr) {
+      setError(ucrErr.message);
+      return;
+    }
+
+    const { error: delErr } = await supabase.from("roles").delete().eq("id", role.id);
+    if (delErr) {
+      setError(delErr.message);
+      return;
+    }
     if (activeCompanyId) loadRoles(activeCompanyId);
   }
 
@@ -147,7 +183,7 @@ export default function AdminRolesPage() {
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
-      {(editingId || (!editingId && roles.filter((r) => r.company_id === activeCompanyId).length === 0)) ? (
+      {(showForm || roles.filter((r) => r.company_id === activeCompanyId).length === 0) ? (
         <form onSubmit={handleSave} className="rounded border border-slate-800 bg-slate-900/50 p-4 max-w-xl space-y-3">
           <h3 className="text-sm font-semibold text-slate-200">{editingId ? "Edit role" : "Create role"}</h3>
           <div>
@@ -160,18 +196,71 @@ export default function AdminRolesPage() {
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">Permissions</label>
-            <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto rounded border border-slate-700 bg-slate-950 p-2">
-              {permissions.map((p) => (
-                <label key={p.id} className="flex items-center gap-1 text-xs text-slate-300">
-                  <input type="checkbox" checked={formPermIds.includes(p.id)} onChange={() => togglePerm(p.id)} />
-                  {p.code}
-                </label>
-              ))}
+            <div className="max-h-72 overflow-y-auto rounded border border-slate-700 bg-slate-950 p-2">
+              {PERMISSION_GROUPS.map((group) => {
+                const groupPerms = group.permissions
+                  .map((meta) => permissionByCode.get(meta.code))
+                  .filter(Boolean) as Permission[];
+                if (groupPerms.length === 0) return null;
+                return (
+                  <div key={group.id} className="mb-2 last:mb-0">
+                    <div className="mb-1 border-b border-slate-800 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      {group.label}
+                    </div>
+                    <div className="space-y-1">
+                      {group.permissions.map((meta) => {
+                        const p = permissionByCode.get(meta.code);
+                        if (!p) return null;
+                        return (
+                          <label key={p.id} className="block rounded px-1 py-1 text-xs text-slate-300 hover:bg-slate-900">
+                            <span className="flex items-start gap-2">
+                              <input type="checkbox" checked={formPermIds.includes(p.id)} onChange={() => togglePerm(p.id)} />
+                              <span>
+                                <span className="block font-medium text-slate-200">{meta.label}</span>
+                                <span className="block text-[11px] text-slate-500">{meta.description}</span>
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              {ungroupedPermissions.length > 0 && (
+                <div className="mb-2 last:mb-0">
+                  <div className="mb-1 border-b border-slate-800 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Admin
+                  </div>
+                  <div className="space-y-1">
+                    {ungroupedPermissions.map((p) => (
+                      <label key={p.id} className="block rounded px-1 py-1 text-xs text-slate-300 hover:bg-slate-900">
+                        <span className="flex items-start gap-2">
+                          <input type="checkbox" checked={formPermIds.includes(p.id)} onChange={() => togglePerm(p.id)} />
+                          <span>
+                            <span className="block font-medium text-slate-200">{p.code}</span>
+                            <span className="block text-[11px] text-slate-500">{p.description ?? "Custom permission"}</span>
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <div className="flex gap-2">
             <button type="submit" disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 disabled:opacity-50">Save</button>
-            {editingId && <button type="button" onClick={() => setEditingId(null)} className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300">Cancel</button>}
+            <button
+              type="button"
+              onClick={() => {
+                setEditingId(null);
+                setShowForm(false);
+              }}
+              className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300"
+            >
+              Cancel
+            </button>
           </div>
         </form>
       ) : (
@@ -195,12 +284,10 @@ export default function AdminRolesPage() {
                 <td className="py-2 pr-3 text-slate-400">{role.company_id ? "Company" : "Template"}</td>
                 <td className="py-2 pr-3 text-xs text-slate-500">{(rolePerms[role.id] ?? []).length} permissions</td>
                 <td className="py-2 pr-3">
-                  {role.company_id && (
-                    <>
-                      <button type="button" onClick={() => openEdit(role)} className="text-xs text-emerald-400 hover:underline mr-2">Edit</button>
-                      {!role.is_system && <button type="button" onClick={() => handleDelete(role)} className="text-xs text-red-400 hover:underline">Delete</button>}
-                    </>
-                  )}
+                  <>
+                    <button type="button" onClick={() => openEdit(role)} className="text-xs text-emerald-400 hover:underline mr-2">Edit</button>
+                    {!role.is_system && <button type="button" onClick={() => handleDelete(role)} className="text-xs text-red-400 hover:underline">Delete</button>}
+                  </>
                 </td>
               </tr>
             ))}

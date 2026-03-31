@@ -11,6 +11,7 @@ type ItemType = {
   name: string;
   sku_prefix: string;
   sku_suffix: string;
+  track_inventory: boolean;
 };
 type Category = { id: string; name: string };
 type CategoryType = { category_id: string; type_id: string };
@@ -29,6 +30,7 @@ export default function AdminTypesPage() {
   const [formPrefix, setFormPrefix] = useState("");
   const [formSuffix, setFormSuffix] = useState("");
   const [formCategoryIds, setFormCategoryIds] = useState<string[]>([]);
+  const [formTrackInventory, setFormTrackInventory] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -46,7 +48,7 @@ export default function AdminTypesPage() {
     const [t, c, ct] = await Promise.all([
       supabase
         .from("item_types")
-        .select("id, company_id, name, sku_prefix, sku_suffix")
+        .select("id, company_id, name, sku_prefix, sku_suffix, track_inventory")
         .eq("company_id", companyId)
         .order("name"),
       supabase.from("item_categories").select("id, name").eq("company_id", companyId).eq("is_active", true).order("name"),
@@ -69,6 +71,7 @@ export default function AdminTypesPage() {
     setFormPrefix("");
     setFormSuffix("");
     setFormCategoryIds([]);
+    setFormTrackInventory(true);
   }
 
   function openEdit(t: ItemType) {
@@ -78,6 +81,7 @@ export default function AdminTypesPage() {
     setFormPrefix(t.sku_prefix ?? "");
     setFormSuffix(t.sku_suffix ?? "");
     setFormCategoryIds(categoriesForType(t.id));
+    setFormTrackInventory(t.track_inventory !== false);
   }
 
   function closeForm() {
@@ -95,7 +99,7 @@ export default function AdminTypesPage() {
     if (editingId) {
       await supabase
         .from("item_types")
-        .update({ name, sku_prefix, sku_suffix })
+        .update({ name, sku_prefix, sku_suffix, track_inventory: formTrackInventory })
         .eq("id", editingId);
       await supabase.from("item_category_types").delete().eq("type_id", editingId);
       if (formCategoryIds.length) {
@@ -104,7 +108,7 @@ export default function AdminTypesPage() {
     } else {
       const { data: newType, error: insertErr } = await supabase
         .from("item_types")
-        .insert({ company_id: activeCompanyId, name, sku_prefix, sku_suffix })
+        .insert({ company_id: activeCompanyId, name, sku_prefix, sku_suffix, track_inventory: formTrackInventory })
         .select("id")
         .single();
       if (!insertErr && newType && formCategoryIds.length) {
@@ -183,6 +187,14 @@ export default function AdminTypesPage() {
               {categories.length === 0 && <span className="text-slate-500 text-sm">No categories yet. Create them under Item categories.</span>}
             </div>
           </div>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={formTrackInventory}
+              onChange={(e) => setFormTrackInventory(e.target.checked)}
+            />
+            Track inventory quantity for this type
+          </label>
           <div className="flex gap-2">
             <button type="submit" disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white">Save</button>
             <button type="button" onClick={closeForm} className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300">Cancel</button>
@@ -197,6 +209,7 @@ export default function AdminTypesPage() {
             <tr className="border-b border-slate-800 text-left text-slate-400">
               <th className="py-2 pr-3">Name</th>
               <th className="py-2 pr-3">SKU pattern</th>
+              <th className="py-2 pr-3">Inventory</th>
               <th className="py-2 pr-3">Categories</th>
               <th></th>
             </tr>
@@ -213,6 +226,7 @@ export default function AdminTypesPage() {
                     {"{counter}"}
                     {(t.sku_suffix ?? "")}
                   </td>
+                  <td className="py-2 pr-3 text-slate-400">{t.track_inventory === false ? "Non-inventory" : "Tracked"}</td>
                   <td className="py-2 pr-3 text-slate-400">{names || "—"}</td>
                   <td className="py-2 pr-3">
                     <button type="button" onClick={() => openEdit(t)} className="text-xs text-emerald-400 hover:underline mr-2">Edit</button>

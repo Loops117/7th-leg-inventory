@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { ActiveCompanySwitcher } from "@/components/ActiveCompanySwitcher";
 import { UserMenu } from "@/components/UserMenu";
-import { SidebarNav } from "@/components/SidebarNav";
+import { SidebarAside } from "@/components/SidebarAside";
+import { RoutePermissionGate } from "@/components/RoutePermissionGate";
 
 export const metadata = {
   title: "In2uition",
@@ -33,13 +34,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
           {/* Main content area with left menu */}
           <div className="flex flex-1 bg-gradient-to-b from-black via-slate-950 to-black">
-            <aside className="w-52 border-r border-slate-900 bg-black/80 px-3 py-4 text-sm">
-              <SidebarNav />
-            </aside>
+            <SidebarAside />
 
-            <main className="flex-1 px-5 py-5">
+            <main className="min-w-0 flex-1 px-5 py-5">
               <div className="mx-auto max-w-5xl rounded-lg border border-slate-900 bg-slate-950/60 p-5 shadow-sm shadow-black/50">
-                {children}
+                <RoutePermissionGate>{children}</RoutePermissionGate>
               </div>
             </main>
           </div>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
+import { useAuthSession } from "@/hooks/useAuthSession";
 
 const ALL_PANES = [
   "incoming",
@@ -46,6 +47,7 @@ export default function HomePage() {
   });
   const [dragging, setDragging] = useState<PaneId | null>(null);
   const [showConfig, setShowConfig] = useState(false);
+  const { authReady, loggedIn } = useAuthSession();
   const [userId, setUserId] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [layoutLoaded, setLayoutLoaded] = useState(false);
@@ -103,8 +105,18 @@ export default function HomePage() {
   const [loadingData, setLoadingData] = useState(true);
 
   useEffect(() => {
+    if (!authReady) return;
+    if (!loggedIn) {
+      setUserId(null);
+      setCompanyId(null);
+      setLayoutLoaded(true);
+      setLoadingData(false);
+      return;
+    }
+
     const init = async () => {
       setDataError(null);
+      setLoadingData(true);
       try {
         const { data: auth } = await supabase.auth.getUser();
         const active = loadActiveCompany();
@@ -300,8 +312,8 @@ export default function HomePage() {
       }
     };
 
-    init();
-  }, []);
+    void init();
+  }, [authReady, loggedIn]);
 
   useEffect(() => {
     if (!layoutLoaded || !userId || !companyId) return;
@@ -345,6 +357,19 @@ export default function HomePage() {
   }
 
   const activePanes = order.filter((id) => visible[id]);
+
+  if (!authReady) {
+    return null;
+  }
+
+  if (!loggedIn) {
+    return (
+      <div className="flex min-h-[calc(100vh-6rem)] flex-col items-center justify-center px-4 text-center">
+        <p className="text-sm font-semibold text-emerald-300">In2uition</p>
+        <p className="mt-2 text-sm text-slate-400">Please log in</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

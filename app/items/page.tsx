@@ -29,10 +29,11 @@ type Item = {
   name: string;
   item_type: string;
   sale_price: number | null;
+  is_catalog_item: boolean;
   item_category_id: string | null;
   item_type_id: string | null;
   item_categories?: { name: string } | null;
-  item_types?: { name: string } | null;
+  item_types?: { name: string; track_inventory?: boolean } | null;
 };
 
 type Location = {
@@ -77,9 +78,10 @@ export default function ItemsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [itemLocations, setItemLocations] = useState<ItemLocation[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
-  const [productTypes, setProductTypes] = useState<{ id: string; name: string }[]>([]);
+  const [productTypes, setProductTypes] = useState<{ id: string; name: string; track_inventory: boolean }[]>([]);
   const [filterCategoryId, setFilterCategoryId] = useState<string>("");
   const [filterTypeId, setFilterTypeId] = useState<string>("");
+  const [filterCatalog, setFilterCatalog] = useState<"all" | "catalog" | "stock">("all");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [sortKey, setSortKey] = useState<"sku" | "name" | "category" | "type" | "incoming" | "quantity" | "price" | "cost">("sku");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -148,12 +150,16 @@ export default function ItemsPage() {
       const { data: catData } = await supabase.from("item_categories").select("id, name").eq("company_id", active.id).eq("is_active", true).order("name");
       setCategories((catData ?? []) as { id: string; name: string }[]);
 
-      const { data: typeData } = await supabase.from("item_types").select("id, name").eq("company_id", active.id).order("name");
-      setProductTypes((typeData ?? []) as { id: string; name: string }[]);
+      const { data: typeData } = await supabase
+        .from("item_types")
+        .select("id, name, track_inventory")
+        .eq("company_id", active.id)
+        .order("name");
+      setProductTypes((typeData ?? []) as { id: string; name: string; track_inventory: boolean }[]);
 
       const { data: itemsData, error } = await supabase
         .from("items")
-        .select("id, sku, name, item_type, sale_price, item_category_id, item_type_id, item_categories(name), item_types(name)")
+        .select("id, sku, name, item_type, sale_price, is_catalog_item, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)")
         .eq("company_id", active.id)
         .order("sku");
 
@@ -256,6 +262,8 @@ export default function ItemsPage() {
   const filteredItems = items.filter((item) => {
     if (filterCategoryId && item.item_category_id !== filterCategoryId) return false;
     if (filterTypeId && item.item_type_id !== filterTypeId) return false;
+    if (filterCatalog === "catalog" && !item.is_catalog_item) return false;
+    if (filterCatalog === "stock" && item.is_catalog_item) return false;
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       const cat = item.item_categories?.name ?? "";
@@ -434,7 +442,7 @@ export default function ItemsPage() {
     setDuplicatingId(item.id);
     const { data: fullItem } = await supabase
       .from("items")
-      .select("id, company_id, sku, name, description, item_type, sale_price, item_category_id, item_type_id")
+      .select("id, company_id, sku, name, description, item_type, sale_price, is_catalog_item, item_category_id, item_type_id")
       .eq("id", item.id)
       .single();
     if (!fullItem) {
@@ -451,6 +459,7 @@ export default function ItemsPage() {
         description: fullItem.description,
         item_type: fullItem.item_type,
         sale_price: fullItem.sale_price,
+        is_catalog_item: fullItem.is_catalog_item ?? false,
         item_category_id: fullItem.item_category_id ?? undefined,
         item_type_id: fullItem.item_type_id ?? undefined,
       })
@@ -529,9 +538,21 @@ export default function ItemsPage() {
             >
               <option value="">All types</option>
               {productTypes.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+                <option key={t.id} value={t.id}>{t.name}{t.track_inventory === false ? " (non-inventory)" : ""}</option>
               ))}
             </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500">Catalog</label>
+              <select
+                value={filterCatalog}
+                onChange={(e) => setFilterCatalog(e.target.value as "all" | "catalog" | "stock")}
+                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+              >
+                <option value="all">All</option>
+                <option value="catalog">Catalog only</option>
+                <option value="stock">Stock only</option>
+              </select>
             </div>
             <div>
               <label className="block text-xs text-slate-500">Search</label>
@@ -546,7 +567,7 @@ export default function ItemsPage() {
             <div className="flex items-end gap-2">
             <button
               type="button"
-              onClick={() => { setFilterCategoryId(""); setFilterTypeId(""); }}
+              onClick={() => { setFilterCategoryId(""); setFilterTypeId(""); setFilterCatalog("all"); }}
               className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
             >
               Clear filters
@@ -688,6 +709,7 @@ export default function ItemsPage() {
             </thead>
           <tbody>
             {sortedItems.map((item) => {
+              const tracksInventory = item.item_types?.track_inventory !== false;
               const defaultIl = itemLocations.find((il) => il.item_id === item.id && il.is_default);
               const otherIls = itemLocations.filter((il) => il.item_id === item.id && !il.is_default);
               const defaultLoc = defaultIl ? locations.find((l) => l.id === defaultIl.location_id) : null;
@@ -720,6 +742,7 @@ export default function ItemsPage() {
                   {columnVisibility.name && (
                     <td className="py-2 pr-3">
                       <Link href={`/items/${item.id}`} className="text-slate-200 hover:text-emerald-300">{item.name}</Link>
+                      {item.is_catalog_item && <span className="ml-2 rounded bg-sky-900/50 px-1.5 py-0.5 text-[10px] text-sky-200">Catalog</span>}
                     </td>
                   )}
                   {columnVisibility.category && (
@@ -729,10 +752,10 @@ export default function ItemsPage() {
                     <td className="py-2 pr-3 text-slate-400">{item.item_types?.name ?? item.item_type ?? "—"}</td>
                   )}
                   {columnVisibility.incoming && (
-                    <td className="py-2 pr-3 text-slate-400 tabular-nums">{incomingByItem[item.id] ?? 0}</td>
+                    <td className="py-2 pr-3 text-slate-400 tabular-nums">{tracksInventory ? (incomingByItem[item.id] ?? 0) : "—"}</td>
                   )}
                   {columnVisibility.quantity && (
-                    <td className="py-2 pr-3 text-slate-300 tabular-nums">{quantityByItem[item.id] ?? 0}</td>
+                    <td className="py-2 pr-3 text-slate-300 tabular-nums">{tracksInventory ? (quantityByItem[item.id] ?? 0) : "—"}</td>
                   )}
                   {columnVisibility.price && (
                     <td className="py-2 pr-3 text-slate-400">
@@ -741,7 +764,7 @@ export default function ItemsPage() {
                   )}
                   {columnVisibility.cost && (
                     <td className="py-2 pr-3 text-slate-400">
-                      {costByItem[item.id] != null ? `$${Number(costByItem[item.id]).toFixed(2)}` : "—"}
+                      {tracksInventory && costByItem[item.id] != null ? `$${Number(costByItem[item.id]).toFixed(2)}` : "—"}
                     </td>
                   )}
                   {columnVisibility.locations && (

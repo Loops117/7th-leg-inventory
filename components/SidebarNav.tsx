@@ -5,14 +5,21 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { loadActiveCompany } from "@/lib/activeCompany";
 import { getCurrentUserPermissions, hasPermission } from "@/lib/permissions";
+import { TAB_REQUIREMENTS } from "@/lib/permissionCatalog";
 
-type Section = "items" | "workorders" | "purchasing" | "sales" | "admin" | null;
+type Section = "items" | "workorders" | "purchasing" | "sales" | "reports" | "admin" | null;
 
 export function SidebarNav() {
   const pathname = usePathname();
   const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [canManageLocations, setCanManageLocations] = useState(false);
+  const [canViewItems, setCanViewItems] = useState(true);
+  const [canViewWorkOrders, setCanViewWorkOrders] = useState(true);
+  const [canViewPurchasing, setCanViewPurchasing] = useState(true);
+  const [canViewSales, setCanViewSales] = useState(true);
+  const [canViewReports, setCanViewReports] = useState(true);
+  const [canViewAdmin, setCanViewAdmin] = useState(true);
   const [expanded, setExpanded] = useState<Section>(null);
 
   useEffect(() => {
@@ -21,6 +28,14 @@ export function SidebarNav() {
     getCurrentUserPermissions(active?.id ?? null).then(({ isSuperAdmin: sa, permissionCodes }) => {
       setIsSuperAdmin(sa);
       setCanManageLocations(hasPermission(permissionCodes, "manage_locations"));
+      const can = (codes: string[]) =>
+        sa || codes.some((c) => hasPermission(permissionCodes, c));
+      setCanViewItems(can(TAB_REQUIREMENTS.items));
+      setCanViewWorkOrders(can(TAB_REQUIREMENTS.work_orders));
+      setCanViewPurchasing(can(TAB_REQUIREMENTS.purchasing));
+      setCanViewSales(can(TAB_REQUIREMENTS.sales));
+      setCanViewReports(can(TAB_REQUIREMENTS.reports));
+      setCanViewAdmin(can(TAB_REQUIREMENTS.admin));
     });
   }, [pathname]);
 
@@ -30,6 +45,7 @@ export function SidebarNav() {
     else if (pathname.startsWith("/work-orders")) setExpanded("workorders");
     else if (pathname.startsWith("/purchasing")) setExpanded("purchasing");
     else if (pathname.startsWith("/sales")) setExpanded("sales");
+    else if (pathname.startsWith("/reports")) setExpanded("reports");
   }, [pathname]);
 
   function toggle(section: Section) {
@@ -40,6 +56,7 @@ export function SidebarNav() {
   const workordersExpanded = expanded === "workorders";
   const purchasingExpanded = expanded === "purchasing";
   const salesExpanded = expanded === "sales";
+  const reportsExpanded = expanded === "reports";
   const adminExpanded = expanded === "admin";
 
   const linkClass = (path: string) =>
@@ -64,6 +81,7 @@ export function SidebarNav() {
         Home
       </Link>
 
+      {canViewItems && (
       <div>
         <div className="flex w-full items-center justify-between rounded px-2 py-1">
           <Link href="/items" className={`flex-1 ${pathname.startsWith("/items") ? "text-emerald-300" : "text-slate-200 hover:text-emerald-300"}`}>
@@ -96,7 +114,9 @@ export function SidebarNav() {
           </div>
         )}
       </div>
+      )}
 
+      {canViewWorkOrders && (
       <div>
         <div className="flex w-full items-center justify-between rounded px-2 py-1">
           <Link href="/work-orders" className={`flex-1 ${pathname.startsWith("/work-orders") ? "text-emerald-300" : "text-slate-200 hover:text-emerald-300"}`}>
@@ -133,6 +153,8 @@ export function SidebarNav() {
           </div>
         )}
       </div>
+      )}
+      {canViewPurchasing && (
       <div>
         <div className="flex w-full items-center justify-between rounded px-2 py-1">
           <Link href="/purchasing" className={`flex-1 ${pathname.startsWith("/purchasing") ? "text-emerald-300" : "text-slate-200 hover:text-emerald-300"}`}>
@@ -159,6 +181,8 @@ export function SidebarNav() {
           </div>
         )}
       </div>
+      )}
+      {canViewSales && (
       <div>
         <div className="flex w-full items-center justify-between rounded px-2 py-1">
           <Link href="/sales" className={`flex-1 ${pathname.startsWith("/sales") ? "text-emerald-300" : "text-slate-200 hover:text-emerald-300"}`}>
@@ -185,7 +209,31 @@ export function SidebarNav() {
           </div>
         )}
       </div>
+      )}
+      {canViewReports && (
+      <div>
+        <div className="flex w-full items-center justify-between rounded px-2 py-1">
+          <Link href="/reports" className={`flex-1 ${pathname.startsWith("/reports") ? "text-emerald-300" : "text-slate-200 hover:text-emerald-300"}`}>
+            Reports
+          </Link>
+          <button type="button" onClick={() => toggle("reports")} className="text-slate-500 hover:text-slate-300" aria-label="Toggle submenu">
+            <span className={`inline-block transition-transform ${reportsExpanded ? "rotate-90" : ""}`}>▶</span>
+          </button>
+        </div>
+        {reportsExpanded && (
+          <div className="ml-3 space-y-0.5 border-l border-slate-700 pl-2">
+            <Link
+              href="/reports"
+              className={`block rounded px-2 py-1 text-sm ${pathname === "/reports" ? "text-emerald-300" : "text-slate-400 hover:text-emerald-300"}`}
+            >
+              Reports Home
+            </Link>
+          </div>
+        )}
+      </div>
+      )}
 
+      {canViewAdmin && (
       <div>
         <div className="flex w-full items-center justify-between rounded px-2 py-1">
           <Link href="/admin" className={`flex-1 ${pathname.startsWith("/admin") ? "text-emerald-300" : "text-slate-200 hover:text-emerald-300"}`}>
@@ -256,6 +304,7 @@ export function SidebarNav() {
           </div>
         )}
       </div>
+      )}
 
       {isSuperAdmin && (
         <Link

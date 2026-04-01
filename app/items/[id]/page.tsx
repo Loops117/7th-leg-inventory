@@ -27,6 +27,7 @@ type Item = {
   sale_price: number | null;
   manual_unit_cost: number | null;
   is_catalog_item: boolean;
+  is_active: boolean;
   item_category_id?: string | null;
   item_type_id?: string | null;
   item_categories?: { name: string } | null;
@@ -255,6 +256,7 @@ export default function ItemDetailPage() {
   const [savingManualCost, setSavingManualCost] = useState(false);
   const [showManualCostModal, setShowManualCostModal] = useState(false);
   const [savingCatalogFlag, setSavingCatalogFlag] = useState(false);
+  const [savingActiveFlag, setSavingActiveFlag] = useState(false);
   const [categories, setCategories] = useState<ItemCategory[]>([]);
   const [productTypes, setProductTypes] = useState<ProductType[]>([]);
   const [categoryTypes, setCategoryTypes] = useState<CategoryType[]>([]);
@@ -427,7 +429,7 @@ export default function ItemDetailPage() {
     const { data: itemData, error: itemErr } = await supabase
       .from("items")
       .select(
-        "id, company_id, sku, name, description, item_type, sale_price, manual_unit_cost, is_catalog_item, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)",
+        "id, company_id, sku, name, description, item_type, sale_price, manual_unit_cost, is_catalog_item, is_active, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)",
       )
       .eq("id", itemId)
       .single();
@@ -976,6 +978,19 @@ export default function ItemDetailPage() {
     setSavingCatalogFlag(false);
   }
 
+  async function handleToggleActiveItem(next: boolean) {
+    if (!item) return;
+    setSavingActiveFlag(true);
+    setError(null);
+    const { error: updErr } = await supabase
+      .from("items")
+      .update({ is_active: next })
+      .eq("id", item.id);
+    if (updErr) setError(updErr.message);
+    else setItem((prev) => (prev ? { ...prev, is_active: next } : prev));
+    setSavingActiveFlag(false);
+  }
+
   async function handleSaveCategoryType() {
     if (!item) return;
     if (!categoryIdEdit || !typeIdEdit) {
@@ -1342,6 +1357,16 @@ export default function ItemDetailPage() {
                   disabled={savingCatalogFlag}
                 />
                 Catalog item (listed for sale, not necessarily stocked)
+              </label>
+
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={item.is_active !== false}
+                  onChange={(e) => void handleToggleActiveItem(e.target.checked)}
+                  disabled={savingActiveFlag}
+                />
+                Active item
               </label>
 
               {!editingCategoryType ? (
@@ -2045,11 +2070,12 @@ export default function ItemDetailPage() {
       </section>
 
       {/* Recent purchases / cost breakdown */}
-      {tracksInventory && (
       <section className="rounded border border-slate-800 bg-slate-900/50">
         <header className="flex items-center justify-between px-4 py-2 border-b border-slate-800">
           <h2 className="text-sm font-semibold text-slate-200">
-            Incoming history &amp; cost breakdown
+            {tracksInventory
+              ? "Incoming history & cost breakdown"
+              : "Purchase history & cost breakdown"}
           </h2>
           <button
             type="button"
@@ -2061,8 +2087,13 @@ export default function ItemDetailPage() {
         </header>
         {!collapsedSections["incoming"] && (
           <div className="p-4">
-            {purchaseTxs.length === 0 ? (
-              <p className="text-sm text-slate-500">No incoming inventory yet.</p>
+            {(tracksInventory
+              ? purchaseTxs
+              : purchaseTxs.filter((t) => t.transaction_type === "purchase_receipt")
+            ).length === 0 ? (
+              <p className="text-sm text-slate-500">
+                {tracksInventory ? "No incoming inventory yet." : "No purchases recorded yet."}
+              </p>
             ) : (
               <table className="w-full border-collapse text-sm">
                 <thead>
@@ -2075,7 +2106,13 @@ export default function ItemDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {purchaseTxs.slice(-20).reverse().map((t) => (
+                  {(tracksInventory
+                    ? purchaseTxs
+                    : purchaseTxs.filter((t) => t.transaction_type === "purchase_receipt")
+                  )
+                    .slice(-20)
+                    .reverse()
+                    .map((t) => (
                     <tr key={t.id} className="border-b border-slate-800">
                       <td className="py-2 pr-2 text-slate-400">
                         {new Date(t.created_at).toLocaleDateString()}
@@ -2108,7 +2145,6 @@ export default function ItemDetailPage() {
           </div>
         )}
       </section>
-      )}
 
       {/* BOM / Kitting */}
       <section className="rounded border border-slate-800 bg-slate-900/50">

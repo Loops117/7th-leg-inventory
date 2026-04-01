@@ -30,6 +30,7 @@ type Item = {
   item_type: string;
   sale_price: number | null;
   is_catalog_item: boolean;
+  is_active: boolean;
   item_category_id: string | null;
   item_type_id: string | null;
   item_categories?: { name: string } | null;
@@ -79,9 +80,11 @@ export default function ItemsPage() {
   const [itemLocations, setItemLocations] = useState<ItemLocation[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [productTypes, setProductTypes] = useState<{ id: string; name: string; track_inventory: boolean }[]>([]);
+  const [categoryTypes, setCategoryTypes] = useState<{ category_id: string; type_id: string }[]>([]);
   const [filterCategoryId, setFilterCategoryId] = useState<string>("");
   const [filterTypeId, setFilterTypeId] = useState<string>("");
   const [filterCatalog, setFilterCatalog] = useState<"all" | "catalog" | "stock">("all");
+  const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [sortKey, setSortKey] = useState<"sku" | "name" | "category" | "type" | "incoming" | "quantity" | "price" | "cost">("sku");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -156,10 +159,14 @@ export default function ItemsPage() {
         .eq("company_id", active.id)
         .order("name");
       setProductTypes((typeData ?? []) as { id: string; name: string; track_inventory: boolean }[]);
+      const { data: ctData } = await supabase
+        .from("item_category_types")
+        .select("category_id, type_id");
+      setCategoryTypes((ctData ?? []) as { category_id: string; type_id: string }[]);
 
       const { data: itemsData, error } = await supabase
         .from("items")
-        .select("id, sku, name, item_type, sale_price, is_catalog_item, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)")
+        .select("id, sku, name, item_type, sale_price, is_catalog_item, is_active, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)")
         .eq("company_id", active.id)
         .order("sku");
 
@@ -259,16 +266,36 @@ export default function ItemsPage() {
     load();
   }, []);
 
+  const typesForFilterCategory = useMemo(() => {
+    if (!filterCategoryId) return productTypes;
+    const allowedTypeIds = new Set(
+      categoryTypes
+        .filter((ct) => ct.category_id === filterCategoryId)
+        .map((ct) => ct.type_id),
+    );
+    return productTypes.filter((t) => allowedTypeIds.has(t.id));
+  }, [filterCategoryId, categoryTypes, productTypes]);
+
+  useEffect(() => {
+    if (!filterTypeId) return;
+    if (!typesForFilterCategory.some((t) => t.id === filterTypeId)) {
+      setFilterTypeId("");
+    }
+  }, [filterTypeId, typesForFilterCategory]);
+
   const filteredItems = items.filter((item) => {
     if (filterCategoryId && item.item_category_id !== filterCategoryId) return false;
     if (filterTypeId && item.item_type_id !== filterTypeId) return false;
     if (filterCatalog === "catalog" && !item.is_catalog_item) return false;
     if (filterCatalog === "stock" && item.is_catalog_item) return false;
+    if (filterActive === "active" && item.is_active === false) return false;
+    if (filterActive === "inactive" && item.is_active !== false) return false;
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       const cat = item.item_categories?.name ?? "";
       const type = item.item_types?.name ?? item.item_type ?? "";
-      const haystack = `${item.sku} ${item.name} ${cat} ${type}`.toLowerCase();
+      const activeState = item.is_active === false ? "inactive" : "active";
+      const haystack = `${item.sku} ${item.name} ${cat} ${type} ${activeState}`.toLowerCase();
       if (!haystack.includes(q)) return false;
     }
     return true;
@@ -537,7 +564,7 @@ export default function ItemsPage() {
               className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
             >
               <option value="">All types</option>
-              {productTypes.map((t) => (
+              {typesForFilterCategory.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}{t.track_inventory === false ? " (non-inventory)" : ""}</option>
               ))}
             </select>
@@ -555,6 +582,18 @@ export default function ItemsPage() {
               </select>
             </div>
             <div>
+              <label className="block text-xs text-slate-500">Status</label>
+              <select
+                value={filterActive}
+                onChange={(e) => setFilterActive(e.target.value as "all" | "active" | "inactive")}
+                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+              >
+                <option value="all">All</option>
+                <option value="active">Active only</option>
+                <option value="inactive">Inactive only</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-xs text-slate-500">Search</label>
               <input
                 type="text"
@@ -567,7 +606,7 @@ export default function ItemsPage() {
             <div className="flex items-end gap-2">
             <button
               type="button"
-              onClick={() => { setFilterCategoryId(""); setFilterTypeId(""); setFilterCatalog("all"); }}
+              onClick={() => { setFilterCategoryId(""); setFilterTypeId(""); setFilterCatalog("all"); setFilterActive("all"); }}
               className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
             >
               Clear filters

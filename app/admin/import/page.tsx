@@ -1086,6 +1086,29 @@ export default function ImportPage() {
         if (lineErr) {
           errors.push(`${rowIndex}: ${lineErr.message}`);
         } else {
+          if (locationId) {
+            const { data: existingDefault } = await supabase
+              .from("item_locations")
+              .select("id")
+              .eq("item_id", itemId)
+              .eq("is_default", true)
+              .maybeSingle();
+
+            const { error: ilErr } = await supabase
+              .from("item_locations")
+              .upsert(
+                {
+                  item_id: itemId,
+                  location_id: locationId,
+                  is_default: !existingDefault,
+                },
+                { onConflict: "item_id,location_id" },
+              );
+
+            if (ilErr) {
+              errors.push(`${rowIndex}: item location link: ${ilErr.message}`);
+            }
+          }
           ok++;
         }
       }

@@ -803,7 +803,7 @@ export default function ItemsPage() {
                   )}
                   {columnVisibility.cost && (
                     <td className="py-2 pr-3 text-slate-400">
-                      {tracksInventory && costByItem[item.id] != null ? `$${Number(costByItem[item.id]).toFixed(2)}` : "—"}
+                      {costByItem[item.id] != null ? `$${Number(costByItem[item.id]).toFixed(2)}` : "—"}
                     </td>
                   )}
                   {columnVisibility.locations && (

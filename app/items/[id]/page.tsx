@@ -58,6 +58,7 @@ type InvTx = {
   landed_unit_cost?: number | null;
   reference_table?: string | null;
   reference_id?: string | null;
+  source_label?: string;
 };
 
 type BomRow = {
@@ -488,7 +489,45 @@ export default function ItemDetailPage() {
       .eq("item_id", itemId)
       .in("transaction_type", ["purchase_receipt", "work_order_completion", "inventory_adjustment"])
       .order("created_at", { ascending: true });
-    setPurchaseTxs((txs ?? []) as InvTx[]);
+    const txList = (txs ?? []) as InvTx[];
+    const receivingRefIds = txList
+      .filter(
+        (t) =>
+          t.transaction_type === "purchase_receipt" &&
+          t.reference_table === "receiving_order_lines" &&
+          Boolean(t.reference_id),
+      )
+      .map((t) => t.reference_id!) as string[];
+    const receivingSourceById = new Map<string, string>();
+    if (receivingRefIds.length > 0) {
+      const { data: recvSources } = await supabase
+        .from("receiving_order_lines")
+        .select("id, vendor_company_name")
+        .in("id", receivingRefIds);
+      (recvSources ?? []).forEach((row: any) => {
+        receivingSourceById.set(
+          String(row.id),
+          (row.vendor_company_name as string | null) ?? "Purchase",
+        );
+      });
+    }
+    setPurchaseTxs(
+      txList.map((t) => {
+        let sourceLabel = t.transaction_type;
+        if (t.transaction_type === "purchase_receipt") {
+          if (t.reference_table === "receiving_order_lines" && t.reference_id) {
+            sourceLabel = receivingSourceById.get(t.reference_id) ?? "Purchase";
+          } else {
+            sourceLabel = "Purchase";
+          }
+        } else if (t.transaction_type === "work_order_completion") {
+          sourceLabel = "Work order";
+        } else if (t.transaction_type === "inventory_adjustment") {
+          sourceLabel = "Adjustment";
+        }
+        return { ...t, source_label: sourceLabel };
+      }),
+    );
 
     // Incoming from receiving (open orders) for this item
     const { data: recvLines } = await supabase
@@ -2118,15 +2157,7 @@ export default function ItemDetailPage() {
                         {new Date(t.created_at).toLocaleDateString()}
                       </td>
                       <td className="py-2 pr-2 text-xs text-slate-400">
-                        {t.transaction_type === "purchase_receipt"
-                          ? t.reference_table === "receiving_order_lines"
-                            ? "Work order"
-                            : "Purchase"
-                          : t.transaction_type === "work_order_completion"
-                          ? "Work order"
-                          : t.transaction_type === "inventory_adjustment"
-                          ? "Adjustment"
-                          : t.transaction_type}
+                        {t.source_label ?? t.transaction_type}
                       </td>
                       <td className="py-2 pr-2">{t.qty_change}</td>
                       <td className="py-2 pr-2">

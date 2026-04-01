@@ -163,7 +163,12 @@ export default function SalesCustomersPage() {
 
   async function handleDelete(id: string) {
     if (!activeCompanyId) return;
-    if (!confirm("Delete this customer? Sales orders will keep a copy of past links where applicable.")) return;
+    if (
+      !confirm(
+        "Delete this customer? Linked sales orders will keep their line items, but the customer link will be cleared on those orders.",
+      )
+    )
+      return;
     setError(null);
     const { error: dErr } = await supabase
       .from("customers")

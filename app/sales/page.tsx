@@ -12,6 +12,7 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
 import { getCostFromTransactions, type CostType } from "@/lib/cost";
+import { getCurrentUserPermissions, hasPermission } from "@/lib/permissions";
 
 export default function SalesPage() {
   type Customer = {
@@ -86,6 +87,8 @@ export default function SalesPage() {
   const [showEditor, setShowEditor] = useState(false);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
+  const [deletingOrder, setDeletingOrder] = useState(false);
+  const [canManageSales, setCanManageSales] = useState(false);
 
   // Editor fields
   const [customerQuery, setCustomerQuery] = useState("");
@@ -112,6 +115,7 @@ export default function SalesPage() {
   const [saleDate, setSaleDate] = useState("");
   const [shipDate, setShipDate] = useState("");
   const [shipNow, setShipNow] = useState(false);
+  const [soNumberInput, setSoNumberInput] = useState("");
 
   type EditableLine = {
     id: string;
@@ -128,6 +132,10 @@ export default function SalesPage() {
   };
   const [editLines, setEditLines] = useState<EditableLine[]>([]);
   const [skuMenuPos, setSkuMenuPos] = useState<SkuMenuPos | null>(null);
+
+  /** Line counts for save/totals only when it has a SKU, description, or linked item (ignores blank trailing row). */
+  const lineHasBusinessContent = (l: EditableLine) =>
+    Boolean(l.item_id || l.sku_text.trim() || l.description.trim());
 
   const emptyLine = (): EditableLine => ({
     id: crypto.randomUUID(),
@@ -222,6 +230,23 @@ export default function SalesPage() {
     loadAll(active.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!activeCompanyId) {
+      setCanManageSales(false);
+      return;
+    }
+    let cancelled = false;
+    void getCurrentUserPermissions(activeCompanyId).then(({ isSuperAdmin, permissionCodes }) => {
+      if (cancelled) return;
+      setCanManageSales(
+        isSuperAdmin || hasPermission(permissionCodes, "manage_sales"),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCompanyId]);
 
   // Customer mini-search (lightweight)
   useEffect(() => {
@@ -381,6 +406,12 @@ export default function SalesPage() {
     setSaleDate(todayLocalISODate());
     setShipDate("");
     setShipNow(false);
+    setSoNumberInput("");
+    if (activeCompanyId) {
+      void allocNextSoNumber(activeCompanyId)
+        .then((n) => setSoNumberInput(String(n)))
+        .catch(() => setSoNumberInput(""));
+    }
 
     setEditLines([emptyLine()]);
   };
@@ -412,6 +443,9 @@ export default function SalesPage() {
     );
     setShipDate(o.ship_date ? String(o.ship_date).slice(0, 10) : "");
     setShipNow(false);
+    setSoNumberInput(
+      o.so_number != null && o.so_number !== "" ? String(o.so_number) : "",
+    );
 
     const these = lines.filter((l) => l.sales_order_id === o.id);
     setEditLines(
@@ -569,6 +603,54 @@ export default function SalesPage() {
     return { subtotal, shipping: ship, total: subtotal + ship, totalCost };
   }, [editLines, isLocalSale, shippingFee]);
 
+  function parseSoNumberInput(raw: string): "auto" | "invalid" | { n: number } {
+    const t = raw.trim();
+    if (t === "") return "auto";
+    if (!/^\d{1,18}$/.test(t)) return "invalid";
+    const n = Number(t);
+    if (!Number.isSafeInteger(n) || n < 0) return "invalid";
+    return { n };
+  }
+
+  const deleteSaleOrder = async (orderId: string) => {
+    if (!activeCompanyId) return;
+    const ok = confirm(
+      "Delete this sale permanently? Line items and linked shipment inventory transactions will be removed.",
+    );
+    if (!ok) return;
+    setDeletingOrder(true);
+    setError(null);
+    try {
+      const { data: lineRows, error: lineErr } = await supabase
+        .from("sales_order_lines")
+        .select("id")
+        .eq("sales_order_id", orderId);
+      if (lineErr) throw new Error(lineErr.message);
+      const lineIds = (lineRows ?? []).map((r: { id: string }) => r.id);
+      if (lineIds.length > 0) {
+        const { error: txErr } = await supabase
+          .from("inventory_transactions")
+          .delete()
+          .eq("reference_table", "sales_order_lines")
+          .in("reference_id", lineIds);
+        if (txErr) throw new Error(txErr.message);
+      }
+      const { error: delErr } = await supabase
+        .from("sales_orders")
+        .delete()
+        .eq("id", orderId)
+        .eq("company_id", activeCompanyId);
+      if (delErr) throw new Error(delErr.message);
+      setShowEditor(false);
+      setEditingOrderId(null);
+      await loadAll(activeCompanyId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setDeletingOrder(false);
+    }
+  };
+
   const saveSale = async (e: FormEvent) => {
     e.preventDefault();
     if (!activeCompanyId) return;
@@ -636,8 +718,9 @@ export default function SalesPage() {
         quantityNum: parseFloat(l.quantity) || 0,
         unitPriceNum: parseFloat(l.unit_price) || 0,
       }))
-      .filter((l) => l.sku_text.trim() || l.description.trim() || l.quantityNum > 0)
-      .filter((l) => l.quantityNum !== 0);
+      .filter(
+        (l) => lineHasBusinessContent(l) && l.quantityNum !== 0,
+      );
 
     if (cleaned.length === 0) {
       setError("Add at least one line item.");
@@ -669,24 +752,30 @@ export default function SalesPage() {
       shipDateOut = saleDateOut ?? todayLocalISODate();
     }
 
+    const soParsed = parseSoNumberInput(soNumberInput);
+    if (soParsed === "invalid") {
+      setError("SO number must be a non-negative whole number, or leave empty for auto number.");
+      setSavingOrder(false);
+      return;
+    }
+    const soForSave = soParsed === "auto" ? null : soParsed.n;
+    if (editingOrderId && soForSave === null) {
+      setError("SO number is required when editing a sale.");
+      setSavingOrder(false);
+      return;
+    }
+
     // Upsert order
     let orderId = editingOrderId;
+    let createdNewOrder = false;
     if (!orderId) {
-      let soNumber: number | string;
-      try {
-        soNumber = await allocNextSoNumber(activeCompanyId);
-      } catch (e: any) {
-        setError(e?.message ?? "Could not allocate sales order number.");
-        setSavingOrder(false);
-        return;
-      }
       const { data: orderRow, error: oErr } = await supabase
         .from("sales_orders")
         .insert({
           company_id: activeCompanyId,
           customer_id: customerId,
           order_type: "sale",
-          so_number: soNumber,
+          so_number: soForSave,
           status: shipNow ? "shipped" : status,
           po_number: poNumber.trim() || null,
           order_notes: orderNotes.trim() || null,
@@ -704,12 +793,14 @@ export default function SalesPage() {
         return;
       }
       orderId = orderRow.id as string;
+      createdNewOrder = true;
     } else {
       const { error: uErr } = await supabase
         .from("sales_orders")
         .update({
           customer_id: customerId,
           status,
+          so_number: soForSave,
           po_number: poNumber.trim() || null,
           order_notes: orderNotes.trim() || null,
           is_local_sale: isLocalSale,
@@ -742,6 +833,7 @@ export default function SalesPage() {
         sku_text: l.sku_text.trim() || null,
         description: l.description.trim() || null,
         quantity: l.quantityNum,
+        ordered_qty: l.quantityNum,
         shipped_quantity: shippedQty,
         unit_price: l.unitPriceNum,
         unit_cost: l.unit_cost,
@@ -753,6 +845,9 @@ export default function SalesPage() {
       .insert(inserting)
       .select("id, item_id, shipped_quantity, quantity, unit_cost");
     if (insErr) {
+      if (createdNewOrder && orderId) {
+        await supabase.from("sales_orders").delete().eq("id", orderId);
+      }
       setError(insErr.message);
       setSavingOrder(false);
       return;
@@ -814,6 +909,7 @@ export default function SalesPage() {
       })),
     );
     setShowEditor(false);
+    setSoNumberInput("");
   };
 
   return (
@@ -930,7 +1026,7 @@ export default function SalesPage() {
         <>
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
           <div className="max-h-[min(92vh,56rem)] w-full max-w-5xl overflow-y-auto rounded border border-slate-800 bg-slate-950 p-4 text-slate-200 shadow-2xl">
-            <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-0.5">
                 <div className="text-sm font-semibold text-emerald-200">
                   {editingOrderId ? "Edit sale" : "New sale"}
@@ -939,13 +1035,25 @@ export default function SalesPage() {
                   Type a customer name to search, and type a SKU to search items.
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={closeSaleEditor}
-                className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-900"
-              >
-                Close
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {editingOrderId && canManageSales && (
+                  <button
+                    type="button"
+                    onClick={() => void deleteSaleOrder(editingOrderId)}
+                    disabled={deletingOrder || savingOrder}
+                    className="rounded border border-red-800 bg-red-950/40 px-2 py-1 text-xs text-red-200 hover:bg-red-900/60 disabled:opacity-50"
+                  >
+                    {deletingOrder ? "Deleting…" : "Delete sale"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeSaleEditor}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-900"
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
             <form onSubmit={saveSale} className="space-y-4">
@@ -1148,6 +1256,23 @@ export default function SalesPage() {
                   )}
 
                   <div className="mt-2 grid gap-2">
+                    <div>
+                      <label className="block text-[11px] text-slate-500">
+                        SO number
+                      </label>
+                      <input
+                        value={soNumberInput}
+                        onChange={(e) => setSoNumberInput(e.target.value)}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                        placeholder={editingOrderId ? undefined : "Auto if empty"}
+                        inputMode="numeric"
+                      />
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        {editingOrderId
+                          ? "Edit the numeric order number for this company."
+                          : "Suggested next # is prefilled; clear to assign automatically."}
+                      </p>
+                    </div>
                     <div>
                       <label className="block text-[11px] text-slate-500">
                         PO number
@@ -1391,7 +1516,7 @@ export default function SalesPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingOrder}
+                  disabled={savingOrder || deletingOrder}
                   className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
                 >
                   {savingOrder ? "Saving…" : "Save sale"}

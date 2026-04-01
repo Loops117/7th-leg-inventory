@@ -89,6 +89,8 @@ export default function SalesPage() {
   const [savingOrder, setSavingOrder] = useState(false);
   const [deletingOrder, setDeletingOrder] = useState(false);
   const [canManageSales, setCanManageSales] = useState(false);
+  /** Existing sale opens read-only until Edit (requires manage_sales). New sale is always editable. */
+  const [saleFormUnlocked, setSaleFormUnlocked] = useState(true);
 
   // Editor fields
   const [customerQuery, setCustomerQuery] = useState("");
@@ -388,6 +390,7 @@ export default function SalesPage() {
 
   const openNewSale = () => {
     setEditingOrderId(null);
+    setSaleFormUnlocked(true);
     setShowEditor(true);
     setError(null);
 
@@ -464,6 +467,7 @@ export default function SalesPage() {
       })),
     );
     if (these.length === 0) setEditLines([emptyLine()]);
+    setSaleFormUnlocked(false);
   };
 
   const lookupItemsBySku = async (idx: number, q: string) => {
@@ -643,6 +647,7 @@ export default function SalesPage() {
       if (delErr) throw new Error(delErr.message);
       setShowEditor(false);
       setEditingOrderId(null);
+      setSaleFormUnlocked(true);
       await loadAll(activeCompanyId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed.");
@@ -654,6 +659,7 @@ export default function SalesPage() {
   const saveSale = async (e: FormEvent) => {
     e.preventDefault();
     if (!activeCompanyId) return;
+    if (editingOrderId && !saleFormUnlocked) return;
     setSavingOrder(true);
     setError(null);
 
@@ -895,6 +901,7 @@ export default function SalesPage() {
     setSkuMenuPos(null);
     setShowEditor(false);
     setEditingOrderId(null);
+    setSaleFormUnlocked(true);
     await loadAll(activeCompanyId);
   };
 
@@ -909,8 +916,12 @@ export default function SalesPage() {
       })),
     );
     setShowEditor(false);
+    setEditingOrderId(null);
+    setSaleFormUnlocked(true);
     setSoNumberInput("");
   };
+
+  const formLocked = Boolean(editingOrderId && !saleFormUnlocked);
 
   return (
     <div className="space-y-4">
@@ -1029,14 +1040,27 @@ export default function SalesPage() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-0.5">
                 <div className="text-sm font-semibold text-emerald-200">
-                  {editingOrderId ? "Edit sale" : "New sale"}
+                  {editingOrderId
+                    ? formLocked
+                      ? "View sale"
+                      : "Edit sale"
+                    : "New sale"}
                 </div>
                 <div className="text-[11px] text-slate-500">
-                  Type a customer name to search, and type a SKU to search items.
+                  {formLocked && canManageSales ? (
+                    <span className="text-slate-400">
+                      Click <span className="font-medium text-slate-300">Edit</span> next to
+                      Save to change this order.
+                    </span>
+                  ) : formLocked && !canManageSales ? (
+                    <span className="text-slate-400">View only — editing requires Manage Sales.</span>
+                  ) : (
+                    <>Type a customer name to search, and type a SKU to search items.</>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {editingOrderId && canManageSales && (
+                {editingOrderId && canManageSales && saleFormUnlocked && (
                   <button
                     type="button"
                     onClick={() => void deleteSaleOrder(editingOrderId)}
@@ -1069,10 +1093,11 @@ export default function SalesPage() {
                         setCustomerQuery(e.target.value);
                         setSelectedCustomerId(null);
                       }}
-                      className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                      disabled={formLocked}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       placeholder="Search name, email, phone, or address…"
                     />
-                    {customerMatches.length > 0 && !selectedCustomerId && (
+                    {customerMatches.length > 0 && !selectedCustomerId && !formLocked && (
                       <div className="absolute z-30 mt-1 w-full overflow-hidden rounded border border-slate-700 bg-slate-950 shadow-xl">
                         {customerMatches.map((c) => (
                           <button
@@ -1096,7 +1121,7 @@ export default function SalesPage() {
                     )}
                   </div>
 
-                  {!selectedCustomerId && (
+                  {!selectedCustomerId && !formLocked && (
                     <div className="mt-2 grid gap-2 rounded border border-slate-800 bg-black/20 p-3 md:grid-cols-3">
                       <div className="md:col-span-3 text-[11px] font-medium text-slate-300">
                         New customer (if no match)
@@ -1155,7 +1180,8 @@ export default function SalesPage() {
                       <input
                         value={addrLine1}
                         onChange={(e) => setAddrLine1(e.target.value)}
-                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                        disabled={formLocked}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                     <div>
@@ -1163,7 +1189,8 @@ export default function SalesPage() {
                       <input
                         value={addrLine2}
                         onChange={(e) => setAddrLine2(e.target.value)}
-                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                        disabled={formLocked}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
@@ -1172,7 +1199,8 @@ export default function SalesPage() {
                         <input
                           value={addrCity}
                           onChange={(e) => setAddrCity(e.target.value)}
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                          disabled={formLocked}
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </div>
                       <div>
@@ -1180,7 +1208,8 @@ export default function SalesPage() {
                         <input
                           value={addrState}
                           onChange={(e) => setAddrState(e.target.value)}
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                          disabled={formLocked}
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </div>
                       <div>
@@ -1188,7 +1217,8 @@ export default function SalesPage() {
                         <input
                           value={addrPostal}
                           onChange={(e) => setAddrPostal(e.target.value)}
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                          disabled={formLocked}
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </div>
                       <div>
@@ -1196,7 +1226,8 @@ export default function SalesPage() {
                         <input
                           value={addrCountry}
                           onChange={(e) => setAddrCountry(e.target.value)}
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                          disabled={formLocked}
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </div>
                     </div>
@@ -1213,7 +1244,8 @@ export default function SalesPage() {
                         type="date"
                         value={saleDate}
                         onChange={(e) => setSaleDate(e.target.value)}
-                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                        disabled={formLocked}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                     <div>
@@ -1224,7 +1256,8 @@ export default function SalesPage() {
                         type="date"
                         value={shipDate}
                         onChange={(e) => setShipDate(e.target.value)}
-                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                        disabled={formLocked}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                   </div>
@@ -1234,8 +1267,8 @@ export default function SalesPage() {
                   <select
                     value={status}
                     onChange={(e) => setStatus(e.target.value as any)}
-                    className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-                    disabled={!editingOrderId && shipNow}
+                    className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={formLocked || (!editingOrderId && shipNow)}
                   >
                     <option value="new">New Order</option>
                     <option value="in_progress">In Progress</option>
@@ -1263,7 +1296,8 @@ export default function SalesPage() {
                       <input
                         value={soNumberInput}
                         onChange={(e) => setSoNumberInput(e.target.value)}
-                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                        disabled={formLocked}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
                         placeholder={editingOrderId ? undefined : "Auto if empty"}
                         inputMode="numeric"
                       />
@@ -1280,7 +1314,8 @@ export default function SalesPage() {
                       <input
                         value={poNumber}
                         onChange={(e) => setPoNumber(e.target.value)}
-                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                        disabled={formLocked}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                     <div>
@@ -1290,7 +1325,8 @@ export default function SalesPage() {
                       <textarea
                         value={orderNotes}
                         onChange={(e) => setOrderNotes(e.target.value)}
-                        className="mt-1 h-20 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                        disabled={formLocked}
+                        className="mt-1 h-20 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
                     <div className="rounded border border-slate-800 bg-black/20 p-2">
@@ -1299,6 +1335,7 @@ export default function SalesPage() {
                           type="checkbox"
                           checked={isLocalSale}
                           onChange={(e) => setIsLocalSale(e.target.checked)}
+                          disabled={formLocked}
                         />
                         Local Sale (no shipping)
                       </label>
@@ -1313,7 +1350,8 @@ export default function SalesPage() {
                             min="0"
                             value={shippingFee}
                             onChange={(e) => setShippingFee(e.target.value)}
-                            className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                            disabled={formLocked}
+                            className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </div>
                       )}
@@ -1375,7 +1413,8 @@ export default function SalesPage() {
                                 });
                                 ensureTrailingBlankLine();
                               }}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+                              disabled={formLocked}
+                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                             />
                           </td>
                           <td className="px-2 py-1 align-top">
@@ -1401,7 +1440,8 @@ export default function SalesPage() {
                                 onFocus={() => {
                                   if (l.sku_text.trim()) lookupItemsBySku(idx, l.sku_text);
                                 }}
-                                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs font-mono"
+                                disabled={formLocked}
+                                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs font-mono disabled:cursor-not-allowed disabled:opacity-60"
                                 placeholder="SKU, name, description…"
                                 autoComplete="off"
                               />
@@ -1420,7 +1460,8 @@ export default function SalesPage() {
                                 ensureTrailingBlankLine();
                               }}
                               rows={4}
-                              className="w-full min-h-[5.5rem] resize-y rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm leading-snug"
+                              disabled={formLocked}
+                              className="w-full min-h-[5.5rem] resize-y rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm leading-snug disabled:cursor-not-allowed disabled:opacity-60"
                               placeholder="Description"
                             />
                           </td>
@@ -1438,7 +1479,8 @@ export default function SalesPage() {
                                 });
                                 ensureTrailingBlankLine();
                               }}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums"
+                              disabled={formLocked}
+                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
                             />
                           </td>
                           <td className="px-2 py-1 text-right tabular-nums text-slate-100">
@@ -1463,9 +1505,9 @@ export default function SalesPage() {
                                   return next;
                                 });
                               }}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums"
+                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
                               placeholder={editingOrderId ? "0" : shipNow ? l.quantity : "0"}
-                              disabled={!editingOrderId}
+                              disabled={formLocked || !editingOrderId}
                             />
                           </td>
                           <td className="px-2 py-1 text-right">
@@ -1478,7 +1520,8 @@ export default function SalesPage() {
                                     : prev.filter((_, i) => i !== idx),
                                 )
                               }
-                              className="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-900"
+                              disabled={formLocked}
+                              className="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               X
                             </button>
@@ -1506,17 +1549,32 @@ export default function SalesPage() {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
                 <button
                   type="button"
-                  onClick={closeSaleEditor}
+                  onClick={() => {
+                    if (editingOrderId && saleFormUnlocked) {
+                      openEditSale(editingOrderId);
+                    } else {
+                      closeSaleEditor();
+                    }
+                  }}
                   className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-900"
                 >
-                  Cancel
+                  {editingOrderId && saleFormUnlocked ? "Discard changes" : "Cancel"}
                 </button>
+                {editingOrderId && canManageSales && formLocked && (
+                  <button
+                    type="button"
+                    onClick={() => setSaleFormUnlocked(true)}
+                    className="rounded border border-emerald-600 bg-emerald-950/50 px-3 py-1.5 text-xs font-medium text-emerald-100 hover:bg-emerald-900/60"
+                  >
+                    Edit
+                  </button>
+                )}
                 <button
                   type="submit"
-                  disabled={savingOrder || deletingOrder}
+                  disabled={savingOrder || deletingOrder || formLocked}
                   className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
                 >
                   {savingOrder ? "Saving…" : "Save sale"}

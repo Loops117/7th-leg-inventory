@@ -1404,88 +1404,108 @@ export default function SalesPage() {
                           className="border-t border-slate-900/70"
                         >
                           <td className="px-2 py-1">
-                            <input
-                              type="number"
-                              step="1"
-                              value={l.quantity}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditLines((prev) => {
-                                  const next = [...prev];
-                                  next[idx] = { ...next[idx], quantity: v };
-                                  return next;
-                                });
-                                ensureTrailingBlankLine();
-                              }}
-                              disabled={formLocked}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                            />
-                          </td>
-                          <td className="px-2 py-1 align-top">
-                            <div className="relative" data-sale-sku-input>
+                            {formLocked ? (
+                              <span className="tabular-nums text-slate-200">{l.quantity || "0"}</span>
+                            ) : (
                               <input
-                                id={`sale-line-sku-${l.id}`}
-                                value={l.sku_text}
+                                type="number"
+                                step="1"
+                                value={l.quantity}
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   setEditLines((prev) => {
                                     const next = [...prev];
-                                    next[idx] = {
-                                      ...next[idx],
-                                      sku_text: v,
-                                      item_id: null,
-                                      skuLookupOpen: true,
-                                    };
+                                    next[idx] = { ...next[idx], quantity: v };
                                     return next;
                                   });
-                                  lookupItemsBySku(idx, v);
                                   ensureTrailingBlankLine();
                                 }}
-                                onFocus={() => {
-                                  if (l.sku_text.trim()) lookupItemsBySku(idx, l.sku_text);
-                                }}
                                 disabled={formLocked}
-                                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs font-mono disabled:cursor-not-allowed disabled:opacity-60"
-                                placeholder="SKU, name, description…"
-                                autoComplete="off"
+                                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                               />
-                            </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1 align-top">
+                            {formLocked ? (
+                              <span className="font-mono text-slate-200">{l.sku_text || "—"}</span>
+                            ) : (
+                              <div className="relative" data-sale-sku-input>
+                                <input
+                                  id={`sale-line-sku-${l.id}`}
+                                  value={l.sku_text}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setEditLines((prev) => {
+                                      const next = [...prev];
+                                      next[idx] = {
+                                        ...next[idx],
+                                        sku_text: v,
+                                        item_id: null,
+                                        skuLookupOpen: true,
+                                      };
+                                      return next;
+                                    });
+                                    lookupItemsBySku(idx, v);
+                                    ensureTrailingBlankLine();
+                                  }}
+                                  onFocus={() => {
+                                    if (l.sku_text.trim()) lookupItemsBySku(idx, l.sku_text);
+                                  }}
+                                  disabled={formLocked}
+                                  className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs font-mono disabled:cursor-not-allowed disabled:opacity-60"
+                                  placeholder="SKU, name, description…"
+                                  autoComplete="off"
+                                />
+                              </div>
+                            )}
                           </td>
                           <td className="px-2 py-1 align-top min-w-[14rem]">
-                            <textarea
-                              value={l.description}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditLines((prev) => {
-                                  const next = [...prev];
-                                  next[idx] = { ...next[idx], description: v };
-                                  return next;
-                                });
-                                ensureTrailingBlankLine();
-                              }}
-                              rows={4}
-                              disabled={formLocked}
-                              className="w-full min-h-[5.5rem] resize-y rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm leading-snug disabled:cursor-not-allowed disabled:opacity-60"
-                              placeholder="Description"
-                            />
+                            {formLocked ? (
+                              <p className="whitespace-pre-wrap text-sm leading-snug text-slate-200">
+                                {l.description || "—"}
+                              </p>
+                            ) : (
+                              <textarea
+                                value={l.description}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setEditLines((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = { ...next[idx], description: v };
+                                    return next;
+                                  });
+                                  ensureTrailingBlankLine();
+                                }}
+                                rows={4}
+                                disabled={formLocked}
+                                className="w-full min-h-[5.5rem] resize-y rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm leading-snug disabled:cursor-not-allowed disabled:opacity-60"
+                                placeholder="Description"
+                              />
+                            )}
                           </td>
                           <td className="px-2 py-1 text-right">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={l.unit_price}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditLines((prev) => {
-                                  const next = [...prev];
-                                  next[idx] = { ...next[idx], unit_price: v };
-                                  return next;
-                                });
-                                ensureTrailingBlankLine();
-                              }}
-                              disabled={formLocked}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
-                            />
+                            {formLocked ? (
+                              <span className="tabular-nums text-slate-200">
+                                ${Number(l.unit_price || 0).toFixed(2)}
+                              </span>
+                            ) : (
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={l.unit_price}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setEditLines((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = { ...next[idx], unit_price: v };
+                                    return next;
+                                  });
+                                  ensureTrailingBlankLine();
+                                }}
+                                disabled={formLocked}
+                                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                            )}
                           </td>
                           <td className="px-2 py-1 text-right tabular-nums text-slate-100">
                             ${lineValue.toFixed(2)}
@@ -1497,38 +1517,46 @@ export default function SalesPage() {
                             {lineCost != null ? `$${lineCost.toFixed(2)}` : "—"}
                           </td>
                           <td className="px-2 py-1 text-right">
-                            <input
-                              type="number"
-                              step="1"
-                              value={l.shipped_quantity}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditLines((prev) => {
-                                  const next = [...prev];
-                                  next[idx] = { ...next[idx], shipped_quantity: v };
-                                  return next;
-                                });
-                              }}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
-                              placeholder={editingOrderId ? "0" : shipNow ? l.quantity : "0"}
-                              disabled={formLocked || !editingOrderId}
-                            />
+                            {formLocked ? (
+                              <span className="tabular-nums text-slate-200">
+                                {l.shipped_quantity || "0"}
+                              </span>
+                            ) : (
+                              <input
+                                type="number"
+                                step="1"
+                                value={l.shipped_quantity}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setEditLines((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = { ...next[idx], shipped_quantity: v };
+                                    return next;
+                                  });
+                                }}
+                                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-right tabular-nums disabled:cursor-not-allowed disabled:opacity-60"
+                                placeholder={editingOrderId ? "0" : shipNow ? l.quantity : "0"}
+                                disabled={formLocked || !editingOrderId}
+                              />
+                            )}
                           </td>
                           <td className="px-2 py-1 text-right">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditLines((prev) =>
-                                  prev.length <= 1
-                                    ? [emptyLine()]
-                                    : prev.filter((_, i) => i !== idx),
-                                )
-                              }
-                              disabled={formLocked}
-                              className="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              X
-                            </button>
+                            {!formLocked && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditLines((prev) =>
+                                    prev.length <= 1
+                                      ? [emptyLine()]
+                                      : prev.filter((_, i) => i !== idx),
+                                  )
+                                }
+                                disabled={formLocked}
+                                className="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                X
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );

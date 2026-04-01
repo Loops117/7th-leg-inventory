@@ -39,6 +39,8 @@ export default function SalesPage() {
     order_notes: string | null;
     is_local_sale: boolean;
     shipping_fee: number | null;
+    sale_date: string | null;
+    ship_date: string | null;
     created_at: string;
   };
 
@@ -107,7 +109,9 @@ export default function SalesPage() {
   const [orderNotes, setOrderNotes] = useState("");
   const [isLocalSale, setIsLocalSale] = useState(false);
   const [shippingFee, setShippingFee] = useState("");
-  const [shipNow, setShipNow] = useState(true);
+  const [saleDate, setSaleDate] = useState("");
+  const [shipDate, setShipDate] = useState("");
+  const [shipNow, setShipNow] = useState(false);
 
   type EditableLine = {
     id: string;
@@ -138,6 +142,14 @@ export default function SalesPage() {
     skuMatches: [],
     skuLoading: false,
   });
+
+  const todayLocalISODate = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
 
   const formatStatus = (s: SalesOrder["status"]) => {
     if (s === "new") return "New Order";
@@ -173,7 +185,7 @@ export default function SalesPage() {
     const { data: orderRows, error: orderErr } = await supabase
       .from("sales_orders")
       .select(
-        "id, company_id, customer_id, status, order_type, so_number, po_number, order_notes, is_local_sale, shipping_fee, created_at",
+        "id, company_id, customer_id, status, order_type, so_number, po_number, order_notes, is_local_sale, shipping_fee, sale_date, ship_date, created_at",
       )
       .eq("company_id", companyId)
       .eq("order_type", "sale")
@@ -366,7 +378,9 @@ export default function SalesPage() {
     setOrderNotes("");
     setIsLocalSale(false);
     setShippingFee("");
-    setShipNow(true);
+    setSaleDate(todayLocalISODate());
+    setShipDate("");
+    setShipNow(false);
 
     setEditLines([emptyLine()]);
   };
@@ -391,6 +405,12 @@ export default function SalesPage() {
     setOrderNotes(o.order_notes ?? "");
     setIsLocalSale(Boolean(o.is_local_sale));
     setShippingFee(o.shipping_fee != null ? String(o.shipping_fee) : "");
+    setSaleDate(
+      o.sale_date
+        ? String(o.sale_date).slice(0, 10)
+        : o.created_at.slice(0, 10),
+    );
+    setShipDate(o.ship_date ? String(o.ship_date).slice(0, 10) : "");
     setShipNow(false);
 
     const these = lines.filter((l) => l.sales_order_id === o.id);
@@ -641,6 +661,14 @@ export default function SalesPage() {
       data: authData,
     } = await supabase.auth.getUser();
 
+    const saleDateOut = saleDate.trim() || null;
+    let shipDateOut = shipDate.trim() || null;
+    if (!editingOrderId && shipNow && !shipDateOut) {
+      shipDateOut = saleDateOut ?? todayLocalISODate();
+    } else if (editingOrderId && status === "shipped" && !shipDateOut) {
+      shipDateOut = saleDateOut ?? todayLocalISODate();
+    }
+
     // Upsert order
     let orderId = editingOrderId;
     if (!orderId) {
@@ -664,6 +692,8 @@ export default function SalesPage() {
           order_notes: orderNotes.trim() || null,
           is_local_sale: isLocalSale,
           shipping_fee: isLocalSale ? 0 : shipFee,
+          sale_date: saleDateOut,
+          ship_date: shipDateOut,
           created_by: authData?.user?.id ?? null,
         })
         .select("id")
@@ -684,6 +714,8 @@ export default function SalesPage() {
           order_notes: orderNotes.trim() || null,
           is_local_sale: isLocalSale,
           shipping_fee: isLocalSale ? 0 : shipFee,
+          sale_date: saleDateOut,
+          ship_date: shipDateOut,
         })
         .eq("id", orderId);
       if (uErr) {
@@ -704,6 +736,8 @@ export default function SalesPage() {
           : Math.max(0, parseFloat(l.shipped_quantity) || 0);
       return {
         sales_order_id: orderId,
+        // Legacy DBs enforce NOT NULL on `so_id`; keep in sync with sales_order_id.
+        so_id: orderId,
         item_id: l.item_id,
         sku_text: l.sku_text.trim() || null,
         description: l.description.trim() || null,
@@ -824,7 +858,8 @@ export default function SalesPage() {
                 <th className="px-3 py-2 font-normal text-right">SO #</th>
                 <th className="px-3 py-2 font-normal text-right">Total price</th>
                 <th className="px-3 py-2 font-normal text-right">Total cost</th>
-                <th className="px-3 py-2 font-normal">Date</th>
+                <th className="px-3 py-2 font-normal">Sale date</th>
+                <th className="px-3 py-2 font-normal">Ship date</th>
                 <th className="px-3 py-2 font-normal text-right"># Items</th>
                 <th className="px-3 py-2 font-normal">Status</th>
               </tr>
@@ -832,7 +867,7 @@ export default function SalesPage() {
             <tbody>
               {orderRowsForTable.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-4 text-slate-500">
+                  <td colSpan={8} className="px-3 py-4 text-slate-500">
                     No sales yet.
                   </td>
                 </tr>
@@ -865,7 +900,17 @@ export default function SalesPage() {
                       ${r.totalCost.toFixed(2)}
                     </td>
                     <td className="px-3 py-2 text-slate-400">
-                      {new Date(r.order.created_at).toLocaleDateString()}
+                      {new Date(
+                        (r.order.sale_date ?? r.order.created_at.slice(0, 10)) +
+                          "T12:00:00",
+                      ).toLocaleDateString()}
+                    </td>
+                    <td className="px-3 py-2 text-slate-400">
+                      {r.order.ship_date
+                        ? new Date(
+                            String(r.order.ship_date).slice(0, 10) + "T12:00:00",
+                          ).toLocaleDateString()
+                        : "—"}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-slate-300">
                       {r.itemCount}
@@ -1051,6 +1096,30 @@ export default function SalesPage() {
                 </div>
 
                 <div>
+                  <div className="mb-2 grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] text-slate-400">
+                        Sale date
+                      </label>
+                      <input
+                        type="date"
+                        value={saleDate}
+                        onChange={(e) => setSaleDate(e.target.value)}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400">
+                        Ship date
+                      </label>
+                      <input
+                        type="date"
+                        value={shipDate}
+                        onChange={(e) => setShipDate(e.target.value)}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+                      />
+                    </div>
+                  </div>
                   <label className="block text-[11px] text-slate-400">
                     Status
                   </label>

@@ -451,22 +451,26 @@ export default function SalesPage() {
     );
 
     const these = lines.filter((l) => l.sales_order_id === o.id);
-    setEditLines(
-      these.map((l) => ({
-        id: l.id,
-        item_id: l.item_id ?? null,
-        sku_text: l.sku_text ?? "",
-        description: l.description ?? "",
-        quantity: String(l.quantity ?? 0),
-        unit_price: String(l.unit_price ?? 0),
-        unit_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
-        shipped_quantity: String(l.shipped_quantity ?? 0),
-        skuLookupOpen: false,
-        skuMatches: [],
-        skuLoading: false,
-      })),
-    );
-    if (these.length === 0) setEditLines([emptyLine()]);
+    if (these.length === 0) {
+      setEditLines([emptyLine()]);
+    } else {
+      setEditLines([
+        ...these.map((l) => ({
+          id: l.id,
+          item_id: l.item_id ?? null,
+          sku_text: l.sku_text ?? "",
+          description: l.description ?? "",
+          quantity: String(l.quantity ?? 0),
+          unit_price: String(l.unit_price ?? 0),
+          unit_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
+          shipped_quantity: String(l.shipped_quantity ?? 0),
+          skuLookupOpen: false,
+          skuMatches: [],
+          skuLoading: false,
+        })),
+        emptyLine(),
+      ]);
+    }
     setSaleFormUnlocked(false);
   };
 
@@ -1566,7 +1570,16 @@ export default function SalesPage() {
                 {editingOrderId && canManageSales && formLocked && (
                   <button
                     type="button"
-                    onClick={() => setSaleFormUnlocked(true)}
+                    onClick={() => {
+                      setEditLines((prev) => {
+                        const last = prev[prev.length - 1];
+                        if (!last || lineHasBusinessContent(last)) {
+                          return last ? [...prev, emptyLine()] : [emptyLine()];
+                        }
+                        return prev;
+                      });
+                      setSaleFormUnlocked(true);
+                    }}
                     className="rounded border border-emerald-600 bg-emerald-950/50 px-3 py-1.5 text-xs font-medium text-emerald-100 hover:bg-emerald-900/60"
                   >
                     Edit

@@ -962,6 +962,9 @@ export default function ImportPage() {
     const dataRows = rows.slice(1).filter((r) => r.some((c) => c.trim()));
     const errors: string[] = [];
     let ok = 0;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
     const { data: itemsData } = await supabase
       .from("items")
@@ -1065,7 +1068,12 @@ export default function ImportPage() {
           }
         }
 
-        const { error: lineErr } = await supabase
+        const unitCost = o.unit_cost ? parseFloat(o.unit_cost) : null;
+        const orderDate = (o.order_date ?? "").trim() || null;
+        const expectedArrival = (o.expected_arrival_date ?? "").trim() || null;
+        const receivedAt = expectedArrival || orderDate || null;
+
+        const { data: insertedLine, error: lineErr } = await supabase
           .from("receiving_order_lines")
           .insert({
             receiving_order_id: roId,
@@ -1073,19 +1081,40 @@ export default function ImportPage() {
             location_id: locationId,
             quantity_ordered: qtyOrdered,
             quantity_received: qtyReceived > 0 ? qtyReceived : 0,
-            unit_cost: o.unit_cost ? parseFloat(o.unit_cost) : null,
+            unit_cost: unitCost,
             pieces_per_pack: null,
             notes: (o.notes ?? "").trim() || null,
-            order_date: (o.order_date ?? "").trim() || null,
+            order_date: orderDate,
             expected_ship_date: (o.expected_ship_date ?? "").trim() || null,
-            expected_arrival_date:
-              (o.expected_arrival_date ?? "").trim() || null,
+            expected_arrival_date: expectedArrival,
             vendor_company_name: (o.vendor_company_name ?? "").trim() || null,
             vendor_url: (o.vendor_url ?? "").trim() || null,
-          });
+          })
+          .select("id")
+          .single();
         if (lineErr) {
           errors.push(`${rowIndex}: ${lineErr.message}`);
         } else {
+          if (qtyReceived > 0) {
+            const { error: txErr } = await supabase
+              .from("inventory_transactions")
+              .insert({
+                company_id: activeCompanyId,
+                item_id: itemId,
+                location_id: locationId,
+                qty_change: qtyReceived,
+                transaction_type: "purchase_receipt",
+                unit_cost: unitCost,
+                landed_unit_cost: unitCost,
+                reference_table: "receiving_order_lines",
+                reference_id: insertedLine.id,
+                created_by: user?.id ?? null,
+                created_at: receivedAt ? new Date(receivedAt).toISOString() : undefined,
+              });
+            if (txErr) {
+              errors.push(`${rowIndex}: receipt transaction: ${txErr.message}`);
+            }
+          }
           if (locationId) {
             const { data: existingDefault } = await supabase
               .from("item_locations")

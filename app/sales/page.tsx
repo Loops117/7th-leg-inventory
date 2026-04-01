@@ -1393,6 +1393,7 @@ export default function SalesPage() {
                   </thead>
                   <tbody>
                     {editLines.map((l, idx) => {
+                      if (formLocked && !lineHasBusinessContent(l)) return null;
                       const q = parseFloat(l.quantity) || 0;
                       const p = parseFloat(l.unit_price) || 0;
                       const lineValue = q * p;

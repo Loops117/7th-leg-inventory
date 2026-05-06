@@ -2,6 +2,7 @@
 
 import {
   FormEvent,
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -83,6 +84,7 @@ type AssemblyComponentRow = {
   item_id: string;
   item_sku: string;
   item_name: string;
+  item_type_name: string;
   quantity_required: number;
   unit_cost: number | null;
   line_total_cost: number | null;
@@ -667,13 +669,14 @@ export default function ItemDetailPage() {
       const { data: inputs } = await supabase
         .from("procedure_items")
         .select(
-          "procedure_id, quantity_required, items ( id, sku, name )",
+          "procedure_id, quantity_required, items ( id, sku, name, item_types ( name ) )",
         )
         .in("procedure_id", procIds);
       const baseRows: AssemblyComponentRow[] =
         (inputs ?? []).map((row: any) => {
           const meta = procMeta.get(row.procedure_id as string);
           const compItemId = row.items?.id as string | undefined;
+          const typeName = String(row.items?.item_types?.name ?? "").trim();
           return {
             procedure_id: row.procedure_id as string,
             procedure_name: meta?.name ?? "",
@@ -681,6 +684,7 @@ export default function ItemDetailPage() {
             item_id: compItemId ?? "",
             item_sku: row.items?.sku ?? "",
             item_name: row.items?.name ?? "",
+            item_type_name: typeName || "Uncategorized",
             quantity_required:
               row.quantity_required != null
                 ? Number(row.quantity_required)
@@ -2605,9 +2609,19 @@ export default function ItemDetailPage() {
               const hasAnyLineCost = rows.some(
                 (r) => r.line_total_cost != null,
               );
-              const sortedRows = [...rows].sort((a, b) =>
-                (a.item_sku || "").localeCompare(b.item_sku || ""),
-              );
+              const byType = new Map<string, AssemblyComponentRow[]>();
+              for (const r of rows) {
+                const t = r.item_type_name || "Uncategorized";
+                const arr = byType.get(t) ?? [];
+                arr.push(r);
+                byType.set(t, arr);
+              }
+              const UNC = "Uncategorized";
+              const typeLabels = [...byType.keys()].sort((a, b) => {
+                if (a === UNC && b !== UNC) return 1;
+                if (b === UNC && a !== UNC) return -1;
+                return a.localeCompare(b);
+              });
               return (
                 <div
                   key={procId}
@@ -2632,43 +2646,60 @@ export default function ItemDetailPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedRows.map((row, idx) => (
-                          <tr
-                            key={`${row.procedure_id}-${row.item_id}-${idx}`}
-                            className="border-b border-slate-900/80"
-                          >
-                            <td className="py-2 px-3 font-mono">
-                              {row.item_id ? (
-                                <Link
-                                  href={`/items/${row.item_id}`}
-                                  className="text-emerald-400 hover:underline"
+                        {typeLabels.map((typeLabel) => {
+                          const sortedRows = [...(byType.get(typeLabel) ?? [])].sort(
+                            (a, b) => (a.item_sku || "").localeCompare(b.item_sku || ""),
+                          );
+                          return (
+                            <Fragment key={`${procId}-${typeLabel}`}>
+                              <tr className="border-b border-slate-800 bg-slate-900/60">
+                                <td
+                                  colSpan={5}
+                                  className="py-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400"
                                 >
-                                  {row.item_sku || "—"}
-                                </Link>
-                              ) : (
-                                <span className="text-slate-500">
-                                  {row.item_sku || "—"}
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-slate-300">
-                              {row.item_name || "—"}
-                            </td>
-                            <td className="py-2 px-3 text-right tabular-nums text-slate-300">
-                              {row.quantity_required}
-                            </td>
-                            <td className="py-2 px-3 text-right tabular-nums text-slate-300">
-                              {row.unit_cost != null
-                                ? `$${row.unit_cost.toFixed(4)}`
-                                : "—"}
-                            </td>
-                            <td className="py-2 px-3 text-right tabular-nums text-slate-300">
-                              {row.line_total_cost != null
-                                ? `$${row.line_total_cost.toFixed(2)}`
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))}
+                                  {typeLabel}
+                                </td>
+                              </tr>
+                              {sortedRows.map((row, idx) => (
+                                <tr
+                                  key={`${row.procedure_id}-${row.item_id}-${typeLabel}-${idx}`}
+                                  className="border-b border-slate-900/80"
+                                >
+                                  <td className="py-2 px-3 font-mono">
+                                    {row.item_id ? (
+                                      <Link
+                                        href={`/items/${row.item_id}`}
+                                        className="text-emerald-400 hover:underline"
+                                      >
+                                        {row.item_sku || "—"}
+                                      </Link>
+                                    ) : (
+                                      <span className="text-slate-500">
+                                        {row.item_sku || "—"}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3 text-slate-300">
+                                    {row.item_name || "—"}
+                                  </td>
+                                  <td className="py-2 px-3 text-right tabular-nums text-slate-300">
+                                    {row.quantity_required}
+                                  </td>
+                                  <td className="py-2 px-3 text-right tabular-nums text-slate-300">
+                                    {row.unit_cost != null
+                                      ? `$${row.unit_cost.toFixed(4)}`
+                                      : "—"}
+                                  </td>
+                                  <td className="py-2 px-3 text-right tabular-nums text-slate-300">
+                                    {row.line_total_cost != null
+                                      ? `$${row.line_total_cost.toFixed(2)}`
+                                      : "—"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

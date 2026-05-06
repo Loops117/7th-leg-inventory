@@ -4,11 +4,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
+import { fetchReceivingOrdersForCompany } from "@/lib/receivingOrdersQuery";
 
 type ReceivingOrder = {
   id: string;
   company_id: string;
   status: string;
+  tracking_number: string | null;
   created_at: string;
 };
 
@@ -44,6 +46,7 @@ export default function ReceivingPage() {
   const [lines, setLines] = useState<ReceivingLineRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<"incoming" | "received" | "cancelled" | "all">("incoming");
   const [workorderFilter, setWorkorderFilter] = useState<"all" | "only" | "none">("all");
@@ -70,12 +73,15 @@ export default function ReceivingPage() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const loadData = useCallback(async (companyId: string) => {
-    const { data: ordersData } = await supabase
-      .from("receiving_orders")
-      .select("id, company_id, status, created_at")
-      .eq("company_id", companyId)
-      .order("created_at", { ascending: false });
-    const ordersList = (ordersData ?? []) as ReceivingOrder[];
+    setError(null);
+    const fetched = await fetchReceivingOrdersForCompany(supabase, companyId);
+    if (!fetched.ok) {
+      setOrders([]);
+      setLines([]);
+      setError(fetched.message);
+      return;
+    }
+    const ordersList = fetched.rows as ReceivingOrder[];
     setOrders(ordersList);
 
     if (ordersList.length === 0) {
@@ -169,7 +175,7 @@ export default function ReceivingPage() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return list;
-  }, [lines, orders, statusFilter, sortBy, sortDir]);
+  }, [lines, orders, statusFilter, workorderFilter, sortBy, sortDir]);
 
   const loadReceiptsForLine = useCallback(async (lineId: string) => {
     const { data } = await supabase
@@ -237,6 +243,7 @@ export default function ReceivingPage() {
 
     setSavingReceive(true);
     setError(null);
+    setNotice(null);
 
     if (onlyUpdatingDates) {
       for (const [txId, dateStr] of Object.entries(editingReceiptDate)) {
@@ -248,6 +255,7 @@ export default function ReceivingPage() {
       setReceiveLine(null);
       setSavingReceive(false);
       loadData(activeCompanyId);
+      setNotice("Receipt dates updated.");
       return;
     }
 
@@ -313,6 +321,7 @@ export default function ReceivingPage() {
 
     setReceiveLine(null);
     setSavingReceive(false);
+    setNotice("Receipt saved.");
     loadData(activeCompanyId);
   };
 
@@ -320,6 +329,7 @@ export default function ReceivingPage() {
     e.preventDefault();
     if (!editLine || !activeCompanyId) return;
     setSavingEdit(true);
+    setNotice(null);
     const qty = parseFloat(editQty) || 0;
     const cost = editCost.trim() ? parseFloat(editCost) : null;
     const pieces = editPieces.trim() ? parseFloat(editPieces) : null;
@@ -410,6 +420,33 @@ export default function ReceivingPage() {
 
     setEditLine(null);
     setSavingEdit(false);
+    setNotice("Receiving line updated.");
+    loadData(activeCompanyId);
+  };
+
+  const deleteLine = async (line: ReceivingLineRow) => {
+    if (!activeCompanyId) return;
+    if (!confirm("Delete this receiving line?")) return;
+    setError(null);
+    setNotice(null);
+    if (Number(line.quantity_received) > 0) {
+      if (!confirm("This line has received quantity. Delete it and all linked receipt transactions?")) return;
+      await supabase
+        .from("inventory_transactions")
+        .delete()
+        .eq("reference_table", "receiving_order_lines")
+        .eq("reference_id", line.id)
+        .eq("transaction_type", "purchase_receipt");
+    }
+    const { error: delErr } = await supabase
+      .from("receiving_order_lines")
+      .delete()
+      .eq("id", line.id);
+    if (delErr) {
+      setError(delErr.message);
+      return;
+    }
+    setNotice("Receiving line deleted.");
     loadData(activeCompanyId);
   };
 
@@ -437,6 +474,7 @@ export default function ReceivingPage() {
       </div>
 
       {error && <p className="text-sm text-red-400">{error}</p>}
+      {notice && <p className="text-sm text-emerald-300">{notice}</p>}
 
       <div className="flex flex-wrap items-center gap-4">
         <span className="text-xs text-slate-500">Show:</span>
@@ -492,6 +530,7 @@ export default function ReceivingPage() {
                 <tr>
                   <th className="px-2 py-2 font-medium">Order status</th>
                   <th className="px-2 py-2 font-medium">Order date</th>
+                  <th className="px-2 py-2 font-medium">Tracking</th>
                   <th className="px-2 py-2 font-medium">SKU</th>
                   <th className="px-2 py-2 font-medium">Item</th>
                   <th className="px-2 py-2 font-medium">Vendor</th>
@@ -505,7 +544,7 @@ export default function ReceivingPage() {
               <tbody>
                 {filteredAndSorted.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-2 py-4 text-center text-slate-500">
+                    <td colSpan={11} className="px-2 py-4 text-center text-slate-500">
                       No lines match the current filter. Try &quot;All&quot; or add items via Quick buy.
                     </td>
                   </tr>
@@ -521,6 +560,7 @@ export default function ReceivingPage() {
                           </span>
                         </td>
                         <td className="px-2 py-1.5 text-slate-400">{line.order_date ?? line.order?.created_at?.slice(0, 10) ?? "—"}</td>
+                        <td className="px-2 py-1.5 text-slate-400">{line.order?.tracking_number ?? "—"}</td>
                         <td className="px-2 py-1.5 font-mono">
                           {line.items ? (
                             <Link href={`/items/${line.item_id}`} className="text-emerald-300 hover:underline">
@@ -569,6 +609,14 @@ export default function ReceivingPage() {
                               Receive more
                             </button>
                           )}
+                          {" "}
+                          <button
+                            type="button"
+                            onClick={() => deleteLine(line)}
+                            className="text-xs text-red-400 hover:underline"
+                          >
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     );

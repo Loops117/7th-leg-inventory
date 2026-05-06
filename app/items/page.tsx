@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
 import { getCostFromTransactions, type CostType } from "@/lib/cost";
+import { chunkArray, fetchAllInPages } from "@/lib/supabasePaginate";
+
+const IN_QUERY_CHUNK = 400;
 
 const ITEMS_COLUMN_KEYS = ["sku", "name", "category", "type", "incoming", "quantity", "price", "cost", "locations", "actions"] as const;
 const COLUMN_LABELS: Record<string, string> = {
@@ -164,32 +167,44 @@ export default function ItemsPage() {
         .select("category_id, type_id");
       setCategoryTypes((ctData ?? []) as { category_id: string; type_id: string }[]);
 
-      const { data: itemsData, error } = await supabase
-        .from("items")
-        .select("id, sku, name, item_type, sale_price, is_catalog_item, is_active, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)")
-        .eq("company_id", active.id)
-        .order("sku");
+      const itemsSelect =
+        "id, sku, name, item_type, sale_price, is_catalog_item, is_active, item_category_id, item_type_id, item_categories(name), item_types(name, track_inventory)";
+      const { rows: itemsData, error: itemsErr } = await fetchAllInPages((from, to) =>
+        supabase.from("items").select(itemsSelect).eq("company_id", active.id).order("sku").range(from, to),
+      );
 
-      if (error) {
-        setError(error.message);
+      if (itemsErr) {
+        setError(itemsErr.message);
         setLoading(false);
         return;
       }
-      setItems((itemsData ?? []) as Item[]);
+      setItems(itemsData as Item[]);
 
-      const ids = (itemsData ?? []).map((i) => i.id);
+      const ids = itemsData.map((i) => i.id);
       if (ids.length > 0) {
-        const { data: ilData } = await supabase.from("item_locations").select("item_id, location_id, is_default").in("item_id", ids);
-        setItemLocations(ilData ?? []);
+        const ilMerged: ItemLocation[] = [];
+        for (const idChunk of chunkArray(ids, IN_QUERY_CHUNK)) {
+          const { data: ilData } = await supabase
+            .from("item_locations")
+            .select("item_id, location_id, is_default")
+            .in("item_id", idChunk);
+          ilMerged.push(...((ilData ?? []) as ItemLocation[]));
+        }
+        setItemLocations(ilMerged);
       } else {
         setItemLocations([]);
       }
 
-      const { data: locData } = await supabase
-        .from("locations")
-        .select("id, code, name, warehouse, section, rack, shelf, position")
-        .eq("company_id", active.id);
-      setLocations(locData ?? []);
+      const { rows: locRows, error: locErr } = await fetchAllInPages((from, to) =>
+        supabase
+          .from("locations")
+          .select("id, code, name, warehouse, section, rack, shelf, position")
+          .eq("company_id", active.id)
+          .order("code")
+          .range(from, to),
+      );
+      if (locErr) setError(locErr.message);
+      setLocations(locErr ? [] : (locRows as Location[]));
 
       const qtyMap: Record<string, number> = {};
       const costMap: Record<string, number | null> = {};
@@ -209,13 +224,22 @@ export default function ItemsPage() {
         const costType = (settings?.cost_type as CostType) ?? "average";
         const useLanded = Boolean((settings as any)?.use_landed_cost);
 
-        const { data: txs } = await supabase
-          .from("inventory_transactions")
-          .select("item_id, qty_change, unit_cost, landed_unit_cost")
-          .eq("company_id", active.id)
-          .in("item_id", ids)
-          .in("transaction_type", ["purchase_receipt", "work_order_completion", "inventory_adjustment"]);
-        const txList = (txs ?? []) as { item_id: string; qty_change: number; unit_cost: number | null; landed_unit_cost?: number | null }[];
+        type InvTxAgg = {
+          item_id: string;
+          qty_change: number;
+          unit_cost: number | null;
+          landed_unit_cost?: number | null;
+        };
+        const txList: InvTxAgg[] = [];
+        for (const idChunk of chunkArray(ids, IN_QUERY_CHUNK)) {
+          const { data: txs } = await supabase
+            .from("inventory_transactions")
+            .select("item_id, qty_change, unit_cost, landed_unit_cost")
+            .eq("company_id", active.id)
+            .in("item_id", idChunk)
+            .in("transaction_type", ["purchase_receipt", "work_order_completion", "inventory_adjustment"]);
+          txList.push(...((txs ?? []) as InvTxAgg[]));
+        }
         const byItem = new Map<string, typeof txList>();
         for (const t of txList) {
           if (!byItem.has(t.item_id)) byItem.set(t.item_id, []);
@@ -238,21 +262,32 @@ export default function ItemsPage() {
           .neq("status", "cancelled");
         const orderIds = (orderRows ?? []).map((r: { id: string }) => r.id);
         if (orderIds.length > 0) {
-          const { data: lines } = await supabase
-            .from("receiving_order_lines")
-            .select("item_id, quantity_ordered, quantity_received, pieces_per_pack")
-            .in("receiving_order_id", orderIds)
-            .in("item_id", ids);
-          (lines ?? []).forEach(
-            (row: { item_id: string; quantity_ordered?: number; quantity_received?: number; pieces_per_pack?: number }) => {
-              const ord = Number(row.quantity_ordered ?? 0);
-              const recv = Number(row.quantity_received ?? 0);
-              const remPacks = Math.max(0, ord - recv);
-              const packSize = Number(row.pieces_per_pack ?? 1) || 1;
-              const remPieces = remPacks * packSize;
-              incomingMap[row.item_id] = (incomingMap[row.item_id] ?? 0) + remPieces;
-            },
-          );
+          const orderChunks =
+            orderIds.length > IN_QUERY_CHUNK ? chunkArray(orderIds, IN_QUERY_CHUNK) : [orderIds];
+          for (const oc of orderChunks) {
+            for (const ic of chunkArray(ids, IN_QUERY_CHUNK)) {
+              const { data: lines } = await supabase
+                .from("receiving_order_lines")
+                .select("item_id, quantity_ordered, quantity_received, pieces_per_pack")
+                .in("receiving_order_id", oc)
+                .in("item_id", ic);
+              (lines ?? []).forEach(
+                (row: {
+                  item_id: string;
+                  quantity_ordered?: number;
+                  quantity_received?: number;
+                  pieces_per_pack?: number;
+                }) => {
+                  const ord = Number(row.quantity_ordered ?? 0);
+                  const recv = Number(row.quantity_received ?? 0);
+                  const remPacks = Math.max(0, ord - recv);
+                  const packSize = Number(row.pieces_per_pack ?? 1) || 1;
+                  const remPieces = remPacks * packSize;
+                  incomingMap[row.item_id] = (incomingMap[row.item_id] ?? 0) + remPieces;
+                },
+              );
+            }
+          }
         }
       }
 
@@ -374,22 +409,27 @@ export default function ItemsPage() {
 
     // Load average cost per item for selected items
     const ids = selected.map((i) => i.id);
-    const { data: txs } = await supabase
-      .from("inventory_transactions")
-      .select("item_id, qty_change, unit_cost")
-      .eq("company_id", activeCompanyId)
-      .in("transaction_type", ["purchase_receipt", "work_order_completion"] as any)
-      .in("item_id", ids);
+    type ExportTx = { item_id: string; qty_change: number; unit_cost: number | null };
+    const txs: ExportTx[] = [];
+    for (const idChunk of chunkArray(ids, IN_QUERY_CHUNK)) {
+      const { data: chunk } = await supabase
+        .from("inventory_transactions")
+        .select("item_id, qty_change, unit_cost")
+        .eq("company_id", activeCompanyId)
+        .in("transaction_type", ["purchase_receipt", "work_order_completion"] as any)
+        .in("item_id", idChunk);
+      txs.push(...((chunk ?? []) as ExportTx[]));
+    }
 
     const costByItem = new Map<string, number | null>();
     for (const id of ids) costByItem.set(id, null);
-    (txs ?? []).forEach((t: any) => {
+    txs.forEach((t: any) => {
       const key = t.item_id as string;
       if (!costByItem.has(key)) costByItem.set(key, null);
     });
     for (const id of ids) {
       const perItem =
-        (txs ?? []).filter((t: any) => t.item_id === id && t.qty_change > 0 && t.unit_cost != null) ??
+        txs.filter((t: any) => t.item_id === id && t.qty_change > 0 && t.unit_cost != null) ??
         [];
       if (perItem.length === 0) {
         costByItem.set(id, null);

@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
+import { getCostFromTransactions, type CostType } from "@/lib/cost";
 
 type Procedure = {
   id: string;
@@ -41,6 +42,7 @@ export default function AdminProceduresPage() {
   const [itemsRequired, setItemsRequired] = useState<ItemRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [inputUnitCosts, setInputUnitCosts] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     const active = loadActiveCompany();
@@ -379,6 +381,77 @@ export default function AdminProceduresPage() {
     loadProcedures(activeCompanyId);
   }
 
+  useEffect(() => {
+    const skus = itemsRequired
+      .map((r) => r.sku.trim())
+      .filter(Boolean);
+    if (!activeCompanyId || skus.length === 0) {
+      setInputUnitCosts({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data: settings } = await supabase
+        .from("company_settings")
+        .select("cost_type, use_landed_cost")
+        .eq("company_id", activeCompanyId)
+        .single();
+      const costType = (settings?.cost_type as CostType) ?? "average";
+      const useLanded = Boolean((settings as any)?.use_landed_cost);
+      const { data: itemRows } = await supabase
+        .from("items")
+        .select("id, sku")
+        .eq("company_id", activeCompanyId)
+        .in("sku", skus);
+      const skuById = new Map<string, string>();
+      const ids = (itemRows ?? []).map((r: any) => {
+        skuById.set(r.id, r.sku);
+        return r.id as string;
+      });
+      if (!ids.length) {
+        if (!cancelled) setInputUnitCosts({});
+        return;
+      }
+      const { data: txs } = await supabase
+        .from("inventory_transactions")
+        .select("item_id, qty_change, unit_cost, landed_unit_cost")
+        .in("item_id", ids)
+        .in("transaction_type", ["purchase_receipt", "work_order_completion", "inventory_adjustment"]);
+      const bySku: Record<string, number | null> = {};
+      for (const sku of skus) bySku[sku] = null;
+      const grouped = new Map<string, { qty_change: number; unit_cost: number | null; landed_unit_cost?: number | null }[]>();
+      for (const t of (txs ?? []) as any[]) {
+        if (!grouped.has(t.item_id)) grouped.set(t.item_id, []);
+        grouped.get(t.item_id)!.push(t);
+      }
+      grouped.forEach((arr, itemId) => {
+        const sku = skuById.get(itemId);
+        if (!sku) return;
+        const mapped = arr.map((t) => ({
+          qty_change: Number(t.qty_change ?? 0),
+          unit_cost: useLanded && t.landed_unit_cost != null ? t.landed_unit_cost : t.unit_cost,
+        }));
+        bySku[sku] = getCostFromTransactions(mapped, costType);
+      });
+      if (!cancelled) setInputUnitCosts(bySku);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCompanyId, itemsRequired]);
+
+  const costSummary = useMemo(() => {
+    const totalInputCost = itemsRequired.reduce((sum, row) => {
+      const qty = parseFloat(row.quantity) || 0;
+      const unit = inputUnitCosts[row.sku.trim()] ?? null;
+      if (!qty || unit == null) return sum;
+      return sum + qty * unit;
+    }, 0);
+    const out = parseFloat(outputQty) || 0;
+    const unitOutputCost = out > 0 ? totalInputCost / out : null;
+    return { totalInputCost, unitOutputCost };
+  }, [itemsRequired, inputUnitCosts, outputQty]);
+
   if (!activeCompanyId) {
     return (
       <div className="space-y-4">
@@ -571,6 +644,12 @@ export default function AdminProceduresPage() {
                           }
                           className="w-20 rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-xs"
                         />
+                        <div className="mt-0.5 text-[10px] text-slate-500">
+                          Unit:{" "}
+                          {inputUnitCosts[row.sku.trim()] != null
+                            ? `$${Number(inputUnitCosts[row.sku.trim()]).toFixed(2)}`
+                            : "—"}
+                        </div>
                       </td>
                       <td className="py-1 pr-2">
                         <button
@@ -586,6 +665,19 @@ export default function AdminProceduresPage() {
                 </tbody>
               </table>
             )}
+            <div className="mt-2 text-xs text-slate-400">
+              Estimated input total:{" "}
+              <span className="font-medium text-slate-200">
+                ${costSummary.totalInputCost.toFixed(2)}
+              </span>
+              <span className="mx-2 text-slate-600">•</span>
+              Estimated output unit cost:{" "}
+              <span className="font-medium text-slate-200">
+                {costSummary.unitOutputCost != null
+                  ? `$${costSummary.unitOutputCost.toFixed(2)}`
+                  : "—"}
+              </span>
+            </div>
           </div>
 
           <div className="flex gap-2">

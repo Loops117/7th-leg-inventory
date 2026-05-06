@@ -134,6 +134,7 @@ export default function HomePage() {
           .select("pane_order, pane_visible")
           .eq("user_id", auth.user.id)
           .eq("company_id", active.id)
+          .eq("scope", "home")
           .maybeSingle();
 
         if (layoutRow) {
@@ -323,10 +324,11 @@ export default function HomePage() {
           {
             user_id: userId,
             company_id: companyId,
+            scope: "home",
             pane_order: order,
             pane_visible: visible,
           },
-          { onConflict: "user_id,company_id" }
+          { onConflict: "user_id,company_id,scope" }
         );
       } catch (err) {
         console.error("Failed to save dashboard layout", err);
@@ -359,7 +361,11 @@ export default function HomePage() {
   const activePanes = order.filter((id) => visible[id]);
 
   if (!authReady) {
-    return null;
+    return (
+      <p className="text-sm text-slate-500" aria-busy="true">
+        Checking sign-in…
+      </p>
+    );
   }
 
   if (!loggedIn) {

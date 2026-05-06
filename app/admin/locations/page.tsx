@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useRef, useState, useEffect } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
@@ -22,6 +22,69 @@ type Location = {
 };
 
 const TABS = ["Warehouses", "Sections", "Racks", "Shelves", "Locations"] as const;
+
+function parseCSV(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(cell.trim());
+      cell = "";
+    } else if (c === "\r" || c === "\n") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell.trim());
+      cell = "";
+      if (row.some((x) => x)) rows.push(row);
+      row = [];
+    } else {
+      cell += c;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell.trim());
+    if (row.some((x) => x)) rows.push(row);
+  }
+  return rows;
+}
+
+function downloadCSV(rows: string[][], filename: string) {
+  const csv = rows
+    .map((r) =>
+      r
+        .map((cell) => {
+          const c = cell ?? "";
+          if (/[",\r\n]/.test(c)) return `"${c.replace(/"/g, '""')}"`;
+          return c;
+        })
+        .join(","),
+    )
+    .join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 export default function AdminLocationsPage() {
   const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
@@ -49,6 +112,10 @@ export default function AdminLocationsPage() {
   const [saving, setSaving] = useState(false);
 
   const [nextLocationCode, setNextLocationCode] = useState("");
+  const [importingLocations, setImportingLocations] = useState(false);
+  const [exportingLocations, setExportingLocations] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const active = loadActiveCompany();
@@ -92,6 +159,271 @@ export default function AdminLocationsPage() {
       .order("code");
     setLocations((locData ?? []) as Location[]);
     setLoading(false);
+  }
+
+  async function handleExportLocations() {
+    if (!activeCompanyId) return;
+    setExportingLocations(true);
+    setError(null);
+    setNotice(null);
+    const rows: string[][] = [
+      [
+        "location_code",
+        "location_name",
+        "position",
+        "is_active",
+        "warehouse_code",
+        "warehouse_name",
+        "section_code",
+        "section_name",
+        "rack_code",
+        "rack_name",
+        "shelf_code",
+        "shelf_name",
+      ],
+    ];
+
+    const shelfById = new Map(shelves.map((s) => [s.id, s]));
+    const rackById = new Map(racks.map((r) => [r.id, r]));
+    const sectionById = new Map(sections.map((s) => [s.id, s]));
+    const whById = new Map(warehouses.map((w) => [w.id, w]));
+
+    for (const loc of locations) {
+      const sh = loc.shelf_id ? shelfById.get(loc.shelf_id) : undefined;
+      const ra = sh ? rackById.get(sh.rack_id) : undefined;
+      const sec = ra ? sectionById.get(ra.section_id) : undefined;
+      const wh = sec ? whById.get(sec.warehouse_id) : undefined;
+      rows.push([
+        loc.code,
+        loc.name ?? "",
+        loc.position ?? "",
+        loc.is_active ? "true" : "false",
+        wh?.code ?? "",
+        wh?.name ?? "",
+        sec?.code ?? "",
+        sec?.name ?? "",
+        ra?.code ?? "",
+        ra?.name ?? "",
+        sh?.code ?? "",
+        sh?.name ?? "",
+      ]);
+    }
+    downloadCSV(rows, "locations_export.csv");
+    setExportingLocations(false);
+    setNotice(`Exported ${Math.max(0, rows.length - 1)} locations.`);
+  }
+
+  async function ensureWarehouse(
+    companyId: string,
+    code: string,
+    name: string | null,
+  ): Promise<string | null> {
+    const cleanCode = code.trim();
+    if (!cleanCode) return null;
+    const { data: existing } = await supabase
+      .from("warehouses")
+      .select("id, name")
+      .eq("company_id", companyId)
+      .eq("code", cleanCode)
+      .maybeSingle();
+    if (existing?.id) {
+      if (!existing.name && name?.trim()) {
+        await supabase
+          .from("warehouses")
+          .update({ name: name.trim() })
+          .eq("id", existing.id);
+      }
+      return existing.id as string;
+    }
+    const { data: inserted, error } = await supabase
+      .from("warehouses")
+      .insert({ company_id: companyId, code: cleanCode, name: name?.trim() || null })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    return inserted.id as string;
+  }
+
+  async function ensureSection(
+    warehouseId: string | null,
+    code: string,
+    name: string | null,
+  ): Promise<string | null> {
+    const cleanCode = code.trim();
+    if (!warehouseId || !cleanCode) return null;
+    const { data: existing } = await supabase
+      .from("sections")
+      .select("id, name")
+      .eq("warehouse_id", warehouseId)
+      .eq("code", cleanCode)
+      .maybeSingle();
+    if (existing?.id) {
+      if (!existing.name && name?.trim()) {
+        await supabase.from("sections").update({ name: name.trim() }).eq("id", existing.id);
+      }
+      return existing.id as string;
+    }
+    const { data: inserted, error } = await supabase
+      .from("sections")
+      .insert({ warehouse_id: warehouseId, code: cleanCode, name: name?.trim() || null })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    return inserted.id as string;
+  }
+
+  async function ensureRack(
+    sectionId: string | null,
+    code: string,
+    name: string | null,
+  ): Promise<string | null> {
+    const cleanCode = code.trim();
+    if (!sectionId || !cleanCode) return null;
+    const { data: existing } = await supabase
+      .from("racks")
+      .select("id, name")
+      .eq("section_id", sectionId)
+      .eq("code", cleanCode)
+      .maybeSingle();
+    if (existing?.id) {
+      if (!existing.name && name?.trim()) {
+        await supabase.from("racks").update({ name: name.trim() }).eq("id", existing.id);
+      }
+      return existing.id as string;
+    }
+    const { data: inserted, error } = await supabase
+      .from("racks")
+      .insert({ section_id: sectionId, code: cleanCode, name: name?.trim() || null })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    return inserted.id as string;
+  }
+
+  async function ensureShelf(
+    rackId: string | null,
+    code: string,
+    name: string | null,
+  ): Promise<string | null> {
+    const cleanCode = code.trim();
+    if (!rackId || !cleanCode) return null;
+    const { data: existing } = await supabase
+      .from("shelves")
+      .select("id, name")
+      .eq("rack_id", rackId)
+      .eq("code", cleanCode)
+      .maybeSingle();
+    if (existing?.id) {
+      if (!existing.name && name?.trim()) {
+        await supabase.from("shelves").update({ name: name.trim() }).eq("id", existing.id);
+      }
+      return existing.id as string;
+    }
+    const { data: inserted, error } = await supabase
+      .from("shelves")
+      .insert({ rack_id: rackId, code: cleanCode, name: name?.trim() || null })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    return inserted.id as string;
+  }
+
+  async function handleImportLocations(file: File) {
+    if (!activeCompanyId) return;
+    setImportingLocations(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length < 2) throw new Error("CSV must include a header and at least one row.");
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const idx = (k: string) => header.indexOf(k);
+      const iLocCode = idx("location_code");
+      if (iLocCode < 0) throw new Error("Missing required header: location_code");
+      const iLocName = idx("location_name");
+      const iPos = idx("position");
+      const iActive = idx("is_active");
+      const iWhCode = idx("warehouse_code");
+      const iWhName = idx("warehouse_name");
+      const iSecCode = idx("section_code");
+      const iSecName = idx("section_name");
+      const iRackCode = idx("rack_code");
+      const iRackName = idx("rack_name");
+      const iShCode = idx("shelf_code");
+      const iShName = idx("shelf_name");
+
+      let created = 0;
+      let updated = 0;
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const locationCode = (row[iLocCode] ?? "").trim();
+        if (!locationCode) continue;
+        const locationName = iLocName >= 0 ? (row[iLocName] ?? "").trim() : "";
+        const position = iPos >= 0 ? (row[iPos] ?? "").trim() : "";
+        const rawActive = iActive >= 0 ? (row[iActive] ?? "").trim().toLowerCase() : "true";
+        const isActive = !["false", "0", "no", "n"].includes(rawActive);
+
+        const whId = await ensureWarehouse(
+          activeCompanyId,
+          iWhCode >= 0 ? (row[iWhCode] ?? "") : "",
+          iWhName >= 0 ? (row[iWhName] ?? "") : null,
+        );
+        const secId = await ensureSection(
+          whId,
+          iSecCode >= 0 ? (row[iSecCode] ?? "") : "",
+          iSecName >= 0 ? (row[iSecName] ?? "") : null,
+        );
+        const rackId = await ensureRack(
+          secId,
+          iRackCode >= 0 ? (row[iRackCode] ?? "") : "",
+          iRackName >= 0 ? (row[iRackName] ?? "") : null,
+        );
+        const shelfId = await ensureShelf(
+          rackId,
+          iShCode >= 0 ? (row[iShCode] ?? "") : "",
+          iShName >= 0 ? (row[iShName] ?? "") : null,
+        );
+
+        const { data: existing } = await supabase
+          .from("locations")
+          .select("id")
+          .eq("company_id", activeCompanyId)
+          .eq("code", locationCode)
+          .maybeSingle();
+        if (existing?.id) {
+          const { error: upErr } = await supabase
+            .from("locations")
+            .update({
+              name: locationName || null,
+              position: position || null,
+              shelf_id: shelfId ?? null,
+              is_active: isActive,
+            })
+            .eq("id", existing.id);
+          if (upErr) throw new Error(upErr.message);
+          updated++;
+        } else {
+          const { error: insErr } = await supabase.from("locations").insert({
+            company_id: activeCompanyId,
+            code: locationCode,
+            name: locationName || null,
+            position: position || null,
+            shelf_id: shelfId ?? null,
+            is_active: isActive,
+          });
+          if (insErr) throw new Error(insErr.message);
+          created++;
+        }
+      }
+      await loadAll(activeCompanyId);
+      setNotice(`Import complete: ${created} created, ${updated} updated.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to import locations.");
+    } finally {
+      setImportingLocations(false);
+      if (importFileRef.current) importFileRef.current.value = "";
+    }
   }
 
   async function loadNextLocationCode() {
@@ -223,7 +555,11 @@ export default function AdminLocationsPage() {
     const r = s.racks;
     const sec = r?.sections;
     const w = sec?.warehouses;
-    return [w?.code, sec?.code, r?.code, s.code].filter(Boolean).join(" → ");
+  const wh = w?.name?.trim() ? `${w.name} (${w.code})` : w?.code;
+  const se = sec?.name?.trim() ? `${sec.name} (${sec.code})` : sec?.code;
+  const ra = r?.name?.trim() ? `${r.name} (${r.code})` : r?.code;
+  const sh = s.name?.trim() ? `${s.name} (${s.code})` : s.code;
+  return [wh, se, ra, sh].filter(Boolean).join(" → ");
   }
 
   function pathLocation(loc: Location) {
@@ -232,7 +568,13 @@ export default function AdminLocationsPage() {
     const r = s.racks;
     const sec = r?.sections;
     const w = sec?.warehouses;
-    return [w?.code, sec?.code, r?.code, s.code].filter(Boolean).join(" → ") + (loc.position ? ` (${loc.position})` : "");
+  const wh = w?.code;
+  const se = sec?.code;
+  const ra = r?.code;
+  const sh = s.code;
+  const base = [wh, se, ra, sh].filter(Boolean).join(" → ");
+  const label = loc.name?.trim() ? `${loc.name} (${loc.code})` : loc.code;
+  return `${label}${base ? ` • ${base}` : ""}${loc.position ? ` (${loc.position})` : ""}`;
   }
 
   if (!activeCompanyId) {
@@ -263,6 +605,7 @@ export default function AdminLocationsPage() {
       </div>
 
       {error && <p className="text-sm text-red-400">{error}</p>}
+      {notice && <p className="text-sm text-emerald-300">{notice}</p>}
 
       <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-2">
         {TABS.map((t) => (
@@ -425,7 +768,35 @@ export default function AdminLocationsPage() {
 
       {!loading && tab === "Locations" && (
         <section>
-          <button type="button" onClick={() => { openNew(); setFormShelfId(shelves[0]?.id ?? ""); }} className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 mb-3">+ Add location</button>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => { openNew(); setFormShelfId(shelves[0]?.id ?? ""); }} className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">+ Add location</button>
+            <button
+              type="button"
+              onClick={() => void handleExportLocations()}
+              disabled={exportingLocations}
+              className="rounded border border-emerald-700 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-900/30 disabled:opacity-50"
+            >
+              {exportingLocations ? "Exporting…" : "Export CSV"}
+            </button>
+            <button
+              type="button"
+              onClick={() => importFileRef.current?.click()}
+              disabled={importingLocations}
+              className="rounded border border-indigo-700 px-3 py-1.5 text-sm text-indigo-300 hover:bg-indigo-900/30 disabled:opacity-50"
+            >
+              {importingLocations ? "Importing…" : "Import CSV"}
+            </button>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleImportLocations(f);
+              }}
+            />
+          </div>
           {(showForm || editingId) && (
             <form onSubmit={handleSaveLocation} className="mb-4 rounded border border-slate-800 bg-slate-900/50 p-4 max-w-md space-y-3">
               <h3 className="text-sm font-semibold">{editingId ? "Edit location" : "Add location"}</h3>
@@ -446,11 +817,12 @@ export default function AdminLocationsPage() {
             </form>
           )}
           <table className="w-full border-collapse text-sm">
-            <thead><tr className="border-b border-slate-800 text-left text-slate-400"><th className="py-2 pr-3">Code</th><th className="py-2 pr-3">Path</th><th className="py-2 pr-3">Status</th><th></th></tr></thead>
+            <thead><tr className="border-b border-slate-800 text-left text-slate-400"><th className="py-2 pr-3">Code</th><th className="py-2 pr-3">Name</th><th className="py-2 pr-3">Path</th><th className="py-2 pr-3">Status</th><th></th></tr></thead>
             <tbody>
               {locations.map((loc) => (
                 <tr key={loc.id} className="border-b border-slate-900">
                   <td className="py-2 pr-3 font-mono">{loc.code}</td>
+                  <td className="py-2 pr-3">{loc.name?.trim() ? loc.name : "—"}</td>
                   <td className="py-2 pr-3 text-slate-400">{pathLocation(loc)}</td>
                   <td className="py-2 pr-3">{loc.is_active ? "Active" : "Inactive"}</td>
                   <td className="py-2 pr-3">

@@ -2036,7 +2036,6 @@ function WorkOrdersPageContent() {
                                     type="date"
                                     value={r.date}
                                     onChange={(e) => updateTimeRow(idx, { date: e.target.value })}
-                                    onBlur={() => persistTimeRow(idx)}
                                     className="w-full rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[11px]"
                                   />
                                 </td>
@@ -2046,7 +2045,6 @@ function WorkOrdersPageContent() {
                                     step={1}
                                     value={r.start_time}
                                     onChange={(e) => updateTimeRow(idx, { start_time: e.target.value })}
-                                    onBlur={() => persistTimeRow(idx)}
                                     className="w-full rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[11px]"
                                   />
                                 </td>
@@ -2056,7 +2054,6 @@ function WorkOrdersPageContent() {
                                     step={1}
                                     value={r.stop_time}
                                     onChange={(e) => updateTimeRow(idx, { stop_time: e.target.value })}
-                                    onBlur={() => persistTimeRow(idx)}
                                     className="w-full rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[11px]"
                                   />
                                 </td>
@@ -2092,7 +2089,7 @@ function WorkOrdersPageContent() {
                     </table>
                   </div>
                   <p className="mt-1 text-[10px] text-slate-500">
-                    Edit any cell like a spreadsheet. Rows auto-save when complete.
+                    Edit any cell like a spreadsheet, then click Save on that row.
                   </p>
                 </div>
 

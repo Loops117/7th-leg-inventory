@@ -226,7 +226,25 @@ export function SidebarNav() {
               href="/reports"
               className={`block rounded px-2 py-1 text-sm ${pathname === "/reports" ? "text-emerald-300" : "text-slate-400 hover:text-emerald-300"}`}
             >
-              Reports Home
+              Dashboard
+            </Link>
+            <Link
+              href="/reports/inventory"
+              className={`block rounded px-2 py-1 text-sm ${pathname === "/reports/inventory" ? "text-emerald-300" : "text-slate-400 hover:text-emerald-300"}`}
+            >
+              Inventory
+            </Link>
+            <Link
+              href="/reports/sales"
+              className={`block rounded px-2 py-1 text-sm ${pathname === "/reports/sales" ? "text-emerald-300" : "text-slate-400 hover:text-emerald-300"}`}
+            >
+              Sales
+            </Link>
+            <Link
+              href="/reports/work-orders"
+              className={`block rounded px-2 py-1 text-sm ${pathname === "/reports/work-orders" ? "text-emerald-300" : "text-slate-400 hover:text-emerald-300"}`}
+            >
+              Work orders
             </Link>
           </div>
         )}

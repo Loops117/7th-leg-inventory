@@ -9,16 +9,32 @@ export function useAuthSession() {
 
   useEffect(() => {
     let cancelled = false;
-    void supabase.auth.getSession().then(({ data: { session } }) => {
+
+    void supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        if (cancelled) return;
+        setLoggedIn(!!session?.user);
+      })
+      .catch((err) => {
+        console.error("getSession failed:", err);
+        if (!cancelled) setLoggedIn(false);
+      })
+      .finally(() => {
+        // Always unlock UI after getSession settles. Do not gate on `cancelled`:
+        // React Strict Mode runs effect cleanup before the promise resolves; skipping
+        // here leaves authReady false forever and pages that wait on it render blank.
+        setAuthReady(true);
+      });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       if (cancelled) return;
       setLoggedIn(!!session?.user);
       setAuthReady(true);
     });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setLoggedIn(!!session?.user);
-    });
+
     return () => {
       cancelled = true;
       subscription.unsubscribe();

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { loadActiveCompany } from "@/lib/activeCompany";
+import { fetchAllItemsSkuToIdMap, fetchAllLocationsCodeToIdMap } from "@/lib/supabasePaginate";
 
 type ImportTab =
   | "items"
@@ -250,8 +251,12 @@ export default function ImportPage() {
     const dataRows = rows.slice(1).filter((r) => r.some((c) => c.trim()));
     const errors: string[] = [];
     let ok = 0;
-    const { data: companyItems } = await supabase.from("items").select("id, sku").eq("company_id", activeCompanyId);
-    const skuToId = new Map((companyItems ?? []).map((x) => [x.sku, x.id]));
+    const { map: skuToId, error: skuMapErr } = await fetchAllItemsSkuToIdMap(supabase, activeCompanyId);
+    if (skuMapErr) {
+      setResult({ ok: 0, errors: [skuMapErr] });
+      setImporting(false);
+      return;
+    }
     for (let i = 0; i < dataRows.length; i++) {
       const o = rowToObj(dataRows[i], BUYING_OPT_COLS);
       const sku = (o.sku ?? "").trim();
@@ -403,11 +408,12 @@ export default function ImportPage() {
     const errors: string[] = [];
     let ok = 0;
 
-    const { data: itemsData } = await supabase
-      .from("items")
-      .select("id, sku")
-      .eq("company_id", activeCompanyId);
-    const skuToId = new Map((itemsData ?? []).map((x) => [x.sku as string, x.id as string]));
+    const { map: skuToId, error: skuMapErr } = await fetchAllItemsSkuToIdMap(supabase, activeCompanyId);
+    if (skuMapErr) {
+      setResult({ ok: 0, errors: [skuMapErr] });
+      setImporting(false);
+      return;
+    }
 
     const { data: catData } = await supabase
       .from("item_categories")
@@ -425,13 +431,15 @@ export default function ImportPage() {
       (typeData ?? []).map((t) => [(t.name as string).toLowerCase(), t.id as string])
     );
 
-    const { data: locData } = await supabase
-      .from("locations")
-      .select("id, code")
-      .eq("company_id", activeCompanyId);
-    const locByCode = new Map(
-      (locData ?? []).map((l) => [(l.code as string).toLowerCase(), l.id as string])
+    const { map: locByCode, error: locErr } = await fetchAllLocationsCodeToIdMap(
+      supabase,
+      activeCompanyId,
     );
+    if (locErr) {
+      setResult({ ok: 0, errors: [locErr] });
+      setImporting(false);
+      return;
+    }
 
     for (let i = 0; i < dataRows.length; i++) {
       const row = dataRows[i];
@@ -579,13 +587,12 @@ export default function ImportPage() {
     const errors: string[] = [];
     let ok = 0;
 
-    const { data: itemsData } = await supabase
-      .from("items")
-      .select("id, sku")
-      .eq("company_id", activeCompanyId);
-    const skuToId = new Map(
-      (itemsData ?? []).map((x) => [String(x.sku), String(x.id)]),
-    );
+    const { map: skuToId, error: skuMapErr } = await fetchAllItemsSkuToIdMap(supabase, activeCompanyId);
+    if (skuMapErr) {
+      setResult({ ok: 0, errors: [skuMapErr] });
+      setImporting(false);
+      return;
+    }
 
     // Group rows by procedure_code
     const byCode = new Map<
@@ -966,24 +973,22 @@ export default function ImportPage() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    const { data: itemsData } = await supabase
-      .from("items")
-      .select("id, sku")
-      .eq("company_id", activeCompanyId);
-    const skuToId = new Map(
-      (itemsData ?? []).map((x) => [String(x.sku), String(x.id)]),
-    );
+    const { map: skuToId, error: skuMapErr } = await fetchAllItemsSkuToIdMap(supabase, activeCompanyId);
+    if (skuMapErr) {
+      setResult({ ok: 0, errors: [skuMapErr] });
+      setImporting(false);
+      return;
+    }
 
-    const { data: locData } = await supabase
-      .from("locations")
-      .select("id, code")
-      .eq("company_id", activeCompanyId);
-    const locByCode = new Map(
-      (locData ?? []).map((l) => [
-        String(l.code).toLowerCase(),
-        String(l.id),
-      ]),
+    const { map: locByCode, error: locErr } = await fetchAllLocationsCodeToIdMap(
+      supabase,
+      activeCompanyId,
     );
+    if (locErr) {
+      setResult({ ok: 0, errors: [locErr] });
+      setImporting(false);
+      return;
+    }
 
     // Group by PO number (or a synthetic key)
     type PoGroup = {

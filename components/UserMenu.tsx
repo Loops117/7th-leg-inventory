@@ -26,10 +26,18 @@ export function UserMenu() {
       };
     }
 
-    void supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ? mapUser(session.user) : null);
-      setLoading(false);
-    });
+    void supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        setUser(session?.user ? mapUser(session.user) : null);
+      })
+      .catch((err) => {
+        console.error("getSession failed:", err);
+        setUser(null);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
 
     const {
       data: { subscription },

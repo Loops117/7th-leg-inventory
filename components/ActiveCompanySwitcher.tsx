@@ -29,48 +29,62 @@ export function ActiveCompanySwitcher() {
 
     async function loadCompaniesForSession() {
       setLoading(true);
+      try {
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+        if (cancelled) return;
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (cancelled) return;
+        if (sessionError) {
+          console.error("getSession failed:", sessionError);
+          setLoggedIn(false);
+          setCompanies([]);
+          setActiveCompany(null);
+          return;
+        }
 
-      if (!sessionData.session) {
-        setLoggedIn(false);
-        setCompanies([]);
-        setActiveCompany(null);
-        setLoading(false);
-        return;
+        if (!sessionData.session) {
+          setLoggedIn(false);
+          setCompanies([]);
+          setActiveCompany(null);
+          return;
+        }
+        setLoggedIn(true);
+
+        const { data, error } = await supabase
+          .from("companies")
+          .select("id, name, is_active")
+          .order("name");
+
+        if (cancelled) return;
+
+        if (error || !data) {
+          setCompanies([]);
+          return;
+        }
+
+        setCompanies(data);
+
+        const stored = loadActiveCompany();
+        if (stored && data.some((c) => c.id === stored.id)) {
+          setActiveCompany(stored);
+          return;
+        }
+
+        if (data.length === 1) {
+          const single = { id: data[0].id, name: data[0].name };
+          setActiveCompany(single);
+          saveActiveCompany(single);
+        }
+      } catch (e) {
+        console.error("loadCompaniesForSession failed:", e);
+        if (!cancelled) {
+          setLoggedIn(false);
+          setCompanies([]);
+          setActiveCompany(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoggedIn(true);
-
-      const { data, error } = await supabase
-        .from("companies")
-        .select("id, name, is_active")
-        .order("name");
-
-      if (cancelled) return;
-
-      if (error || !data) {
-        setCompanies([]);
-        setLoading(false);
-        return;
-      }
-
-      setCompanies(data);
-
-      const stored = loadActiveCompany();
-      if (stored && data.some((c) => c.id === stored.id)) {
-        setActiveCompany(stored);
-        setLoading(false);
-        return;
-      }
-
-      if (data.length === 1) {
-        const single = { id: data[0].id, name: data[0].name };
-        setActiveCompany(single);
-        saveActiveCompany(single);
-      }
-
-      setLoading(false);
     }
 
     void loadCompaniesForSession();

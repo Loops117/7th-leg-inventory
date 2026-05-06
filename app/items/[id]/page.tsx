@@ -16,6 +16,7 @@ import {
   getCurrentUserPermissions,
   hasPermission,
 } from "@/lib/permissions";
+import { assembleFromProcedure } from "@/lib/assembleFromProcedure";
 
 type Item = {
   id: string;
@@ -253,6 +254,20 @@ export default function ItemDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [useLandedCost, setUseLandedCost] = useState(false);
   const [canAdjustCost, setCanAdjustCost] = useState(false);
+  const [canManageInventory, setCanManageInventory] = useState(false);
+  const [kitAssemblerProcedures, setKitAssemblerProcedures] = useState<
+    {
+      id: string;
+      name: string;
+      procedure_code: string;
+      version: string;
+      output_quantity: number;
+    }[]
+  >([]);
+  const [quickAssembleOpen, setQuickAssembleOpen] = useState(false);
+  const [qaProcedureId, setQaProcedureId] = useState("");
+  const [qaBuildCount, setQaBuildCount] = useState("1");
+  const [qaSubmitting, setQaSubmitting] = useState(false);
   const [manualCostEdit, setManualCostEdit] = useState("");
   const [savingManualCost, setSavingManualCost] = useState(false);
   const [showManualCostModal, setShowManualCostModal] = useState(false);
@@ -277,6 +292,10 @@ export default function ItemDetailPage() {
   const [incomingQty, setIncomingQty] = useState(0);
   const [avgSecondsPerPiece, setAvgSecondsPerPiece] = useState<number | null>(null);
   const [savingAdjust, setSavingAdjust] = useState(false);
+  const [transferFromLocationId, setTransferFromLocationId] = useState<string | null>(null);
+  const [transferToLocationId, setTransferToLocationId] = useState("");
+  const [transferQty, setTransferQty] = useState("");
+  const [savingTransfer, setSavingTransfer] = useState(false);
 
   // Buying option form (add/edit)
   const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
@@ -605,7 +624,9 @@ export default function ItemDetailPage() {
 
     const { data: procs } = await supabase
       .from("procedures")
-      .select("id, name, version, procedure_code, item_id, output_item_id")
+      .select(
+        "id, name, version, procedure_code, item_id, output_item_id, output_quantity",
+      )
       .eq("is_active", true)
       .eq("company_id", itemData.company_id)
       .or(`item_id.eq.${itemId},output_item_id.eq.${itemId}`);
@@ -620,6 +641,15 @@ export default function ItemDetailPage() {
 
     // Assembly components: inputs from procedures that build this item (output_item_id = this item)
     const builderProcs = procRows.filter((p) => p.output_item_id === itemId);
+    setKitAssemblerProcedures(
+      builderProcs.map((p: any) => ({
+        id: p.id as string,
+        name: (p.name as string) ?? "",
+        procedure_code: (p.procedure_code as string) ?? "",
+        version: String(p.version ?? ""),
+        output_quantity: Math.max(0, Number(p.output_quantity ?? 0)),
+      })),
+    );
     if (builderProcs.length > 0) {
       const procIds = builderProcs.map((p) => p.id as string);
       setAssemblyProcedureOrder(procIds);
@@ -802,14 +832,19 @@ export default function ItemDetailPage() {
     if (woIds.length > 0) {
       const { data: assigns } = await supabase
         .from("work_order_assignments")
-        .select("id, work_order_id, quantity_to_build, last_completed_at")
+        .select("id, work_order_id, quantity_to_build, created_at, last_completed_at")
         .in("work_order_id", woIds)
         .not("last_completed_at", "is", null)
         .order("last_completed_at", { ascending: false })
         .limit(3);
       const assignmentRows =
-        (assigns as { id: string; work_order_id: string; quantity_to_build: number | null; last_completed_at: string | null }[] | null) ??
-        [];
+        (assigns as {
+          id: string;
+          work_order_id: string;
+          quantity_to_build: number | null;
+          created_at: string;
+          last_completed_at: string | null;
+        }[] | null) ?? [];
       if (assignmentRows.length > 0) {
         const assignIds = assignmentRows.map((a) => a.id);
         const { data: evData } = await supabase
@@ -827,17 +862,27 @@ export default function ItemDetailPage() {
           const qty = Number(a.quantity_to_build ?? 0);
           if (!qty || qty <= 0) continue;
           const evs = events.filter((e) => e.assignment_id === a.id);
-          if (!evs.length) continue;
-          let currentStart: Date | null = null;
-          for (const e of evs) {
-            const ts = new Date(e.occurred_at);
-            if (e.event_type === "start" || e.event_type === "resume") {
-              currentStart = ts;
-            } else if ((e.event_type === "pause" || e.event_type === "complete") && currentStart) {
-              totalSeconds += (ts.getTime() - currentStart.getTime()) / 1000;
-              currentStart = null;
+          let segmentSeconds = 0;
+          if (evs.length > 0) {
+            let currentStart: Date | null = null;
+            for (const e of evs) {
+              const ts = new Date(e.occurred_at);
+              if (e.event_type === "start" || e.event_type === "resume") {
+                currentStart = ts;
+              } else if ((e.event_type === "pause" || e.event_type === "complete") && currentStart) {
+                segmentSeconds += (ts.getTime() - currentStart.getTime()) / 1000;
+                currentStart = null;
+              }
             }
           }
+          if (segmentSeconds <= 0 && a.last_completed_at && a.created_at) {
+            segmentSeconds =
+              (new Date(a.last_completed_at).getTime() -
+                new Date(a.created_at).getTime()) /
+              1000;
+          }
+          if (segmentSeconds <= 0) continue;
+          totalSeconds += segmentSeconds;
           totalPieces += qty;
         }
 
@@ -863,12 +908,17 @@ export default function ItemDetailPage() {
   useEffect(() => {
     if (!item?.company_id) {
       setCanAdjustCost(false);
+      setCanManageInventory(false);
       return;
     }
     getCurrentUserPermissions(item.company_id).then(
       ({ isSuperAdmin, permissionCodes }) => {
         setCanAdjustCost(
           isSuperAdmin || hasPermission(permissionCodes, "manage_locations"),
+        );
+        setCanManageInventory(
+          isSuperAdmin ||
+            hasPermission(permissionCodes, "manage_inventory"),
         );
       },
     );
@@ -1142,6 +1192,12 @@ export default function ItemDetailPage() {
     setAdjustResetCost(false);
   }
 
+  function openTransfer(locationId: string, currentQty: number) {
+    setTransferFromLocationId(locationId);
+    setTransferToLocationId("");
+    setTransferQty(String(Math.max(0, Math.floor(currentQty))));
+  }
+
   async function submitAdjust(e: FormEvent) {
     e.preventDefault();
     if (!item || !adjustingLocationId) return;
@@ -1174,6 +1230,141 @@ export default function ItemDetailPage() {
     }
     setSavingAdjust(false);
     setAdjustingLocationId(null);
+    load();
+  }
+
+  async function submitTransfer(e: FormEvent) {
+    e.preventDefault();
+    if (!item || !transferFromLocationId || !transferToLocationId) return;
+    if (transferFromLocationId === transferToLocationId) {
+      setError("Pick a different destination location.");
+      return;
+    }
+    const fromBal = inventoryByLocation.find((b) => b.location_id === transferFromLocationId);
+    const available = Math.max(0, Number(fromBal?.on_hand_qty ?? 0));
+    const qty = Math.max(0, Math.floor(parseFloat(transferQty) || 0));
+    if (qty <= 0) {
+      setError("Enter a transfer quantity greater than zero.");
+      return;
+    }
+    if (qty > available) {
+      setError("Transfer quantity exceeds on-hand at source.");
+      return;
+    }
+    setSavingTransfer(true);
+    setError(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const baseTx = {
+      company_id: item.company_id,
+      item_id: item.id,
+      transaction_type: "inventory_adjustment",
+      created_by: user?.id ?? null,
+    };
+    const { error: outErr } = await supabase.from("inventory_transactions").insert({
+      ...baseTx,
+      location_id: transferFromLocationId,
+      qty_change: -qty,
+    });
+    if (outErr) {
+      setError(outErr.message);
+      setSavingTransfer(false);
+      return;
+    }
+    const { error: inErr } = await supabase.from("inventory_transactions").insert({
+      ...baseTx,
+      location_id: transferToLocationId,
+      qty_change: qty,
+    });
+    if (inErr) {
+      setError(inErr.message);
+      setSavingTransfer(false);
+      return;
+    }
+    setSavingTransfer(false);
+    setTransferFromLocationId(null);
+    load();
+  }
+
+  function openQuickAssemble() {
+    setQaBuildCount("1");
+    setError(null);
+    if (kitAssemblerProcedures.filter((p) => p.output_quantity > 0).length === 1) {
+      setQaProcedureId(
+        kitAssemblerProcedures.filter((p) => p.output_quantity > 0)[0]!.id,
+      );
+    } else {
+      setQaProcedureId("");
+    }
+    setQuickAssembleOpen(true);
+  }
+
+  async function submitQuickAssemble(e: FormEvent) {
+    e.preventDefault();
+    if (!item) return;
+    const procId = qaProcedureId.trim();
+    const bc = Math.floor(parseFloat(qaBuildCount));
+    const chosen = kitAssemblerProcedures.find((p) => p.id === procId);
+    if (!chosen || chosen.output_quantity <= 0) {
+      setError("Select a kit procedure.");
+      return;
+    }
+    if (!procId || !Number.isFinite(bc) || bc < 1) {
+      setError("Enter a quantity of at least 1.");
+      return;
+    }
+
+    let outputLocationId: string | undefined;
+    const defaultIl = itemLocations.find((il) => il.is_default);
+    if (defaultIl) outputLocationId = defaultIl.location_id;
+    else if (itemLocations[0])
+      outputLocationId = itemLocations[0].location_id;
+    else if (companyLocations[0]) outputLocationId = companyLocations[0].id;
+
+    const { data: locFallback } = await supabase
+      .from("locations")
+      .select("id")
+      .eq("company_id", item.company_id)
+      .limit(1);
+    const fallbackLoc = locFallback?.[0]?.id as string | undefined;
+    const outputLoc = outputLocationId ?? fallbackLoc;
+    const inputLoc = fallbackLoc;
+    if (!outputLoc || !inputLoc) {
+      setError(
+        "Add at least one warehouse location for this company before assembling.",
+      );
+      return;
+    }
+
+    setQaSubmitting(true);
+    setError(null);
+
+    const { data: auth } = await supabase.auth.getUser();
+
+    const res = await assembleFromProcedure(
+      supabase,
+      {
+        companyId: item.company_id,
+        outputItemId: item.id,
+        procedureId: procId,
+        buildCount: bc,
+        outputLocationId: outputLoc,
+        inputLocationId: inputLoc,
+      },
+      {
+        costType,
+        useLandedCost: useLandedCost,
+        userId: auth?.user?.id ?? null,
+      },
+    );
+
+    setQaSubmitting(false);
+
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+
+    setQuickAssembleOpen(false);
     load();
   }
 
@@ -1539,6 +1730,17 @@ export default function ItemDetailPage() {
                 <div>
                   <span className="block text-xs text-slate-500">Total on hand</span>
                   <p className="mt-1 text-lg font-medium text-slate-100">{tracksInventory ? totalOnHand : "—"}</p>
+                  {tracksInventory &&
+                    canManageInventory &&
+                    kitAssemblerProcedures.some((p) => p.output_quantity > 0) && (
+                      <button
+                        type="button"
+                        onClick={openQuickAssemble}
+                        className="mt-3 w-full rounded border border-indigo-700 bg-indigo-900/40 px-3 py-1.5 text-xs font-medium text-indigo-100 hover:bg-indigo-800/70"
+                      >
+                        Quick assemble
+                      </button>
+                    )}
                 </div>
                 <div className="mt-1 text-[11px] text-slate-400">
                   <span>Total locations: </span>
@@ -1809,6 +2011,14 @@ export default function ItemDetailPage() {
                               Adjust
                             </button>
                             <span className="text-slate-600">|</span>
+                            <button
+                              type="button"
+                              onClick={() => openTransfer(il.location_id, onHand)}
+                              className="text-xs text-emerald-400 hover:underline"
+                            >
+                              Transfer
+                            </button>
+                            <span className="text-slate-600">|</span>
                           </>
                         )}
                         <button
@@ -1915,6 +2125,141 @@ export default function ItemDetailPage() {
                   type="button"
                   onClick={() => setAdjustingLocationId(null)}
                   className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer inventory modal */}
+      {tracksInventory && transferFromLocationId && item && (
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/70">
+          <div className="w-full max-w-sm rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-xl">
+            <h3 className="text-sm font-semibold text-slate-200 mb-2">Transfer inventory</h3>
+            <p className="text-xs text-slate-400 mb-3">
+              From: {companyLocations.find((l) => l.id === transferFromLocationId) ? locationDisplayLabel(companyLocations.find((l) => l.id === transferFromLocationId)!) : transferFromLocationId}
+            </p>
+            <form onSubmit={submitTransfer} className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-500">To location</label>
+                <select
+                  value={transferToLocationId}
+                  onChange={(e) => setTransferToLocationId(e.target.value)}
+                  className="mt-0.5 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+                  required
+                >
+                  <option value="">Select destination…</option>
+                  {itemLocations
+                    .filter((il) => il.location_id !== transferFromLocationId)
+                    .map((il) => companyLocations.find((l) => l.id === il.location_id))
+                    .filter(Boolean)
+                    .map((loc) => (
+                      <option key={loc!.id} value={loc!.id}>
+                        {locationDisplayLabel(loc!)}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500">Quantity to transfer</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={transferQty}
+                  onChange={(e) => setTransferQty(e.target.value)}
+                  className="mt-0.5 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={savingTransfer}
+                  className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {savingTransfer ? "Transferring…" : "Transfer"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTransferFromLocationId(null)}
+                  className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {tracksInventory && quickAssembleOpen && item && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70">
+          <div className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-xl">
+            <h3 className="text-sm font-semibold text-slate-200 mb-1">Quick assemble</h3>
+            <p className="text-[11px] text-slate-500 mb-3">
+              Consume inputs from inventory and add assembled units ({item.name || item.sku}) using current costs.
+            </p>
+            <form onSubmit={submitQuickAssemble} className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Procedure</label>
+                <select
+                  value={qaProcedureId}
+                  onChange={(e) => setQaProcedureId(e.target.value)}
+                  required
+                  className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+                >
+                  <option value="">Select procedure…</option>
+                  {kitAssemblerProcedures
+                    .filter((p) => p.output_quantity > 0)
+                    .map((p) => {
+                      const label = p.procedure_code
+                        ? `${p.procedure_code} – ${p.name}`
+                        : p.name || "Procedure";
+                      return (
+                        <option key={p.id} value={p.id}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Quantity</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={qaBuildCount}
+                  onChange={(e) => setQaBuildCount(e.target.value)}
+                  className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+                />
+                <p className="mt-1 text-[10px] text-slate-500">
+                  Number of assemblies; output per assembly comes from the procedure.
+                </p>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={
+                    qaSubmitting ||
+                    kitAssemblerProcedures.filter((p) => p.output_quantity > 0)
+                      .length === 0
+                  }
+                  className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {qaSubmitting ? "Assembling…" : "Assemble"}
+                </button>
+                <button
+                  type="button"
+                  disabled={qaSubmitting}
+                  onClick={() => {
+                    setQuickAssembleOpen(false);
+                    setQaProcedureId("");
+                  }}
+                  className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
                 >
                   Cancel
                 </button>

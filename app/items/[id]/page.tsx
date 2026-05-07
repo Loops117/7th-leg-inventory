@@ -963,50 +963,6 @@ export default function ItemDetailPage() {
     });
   };
 
-  const handlePrintAssemblyComponents = useCallback(() => {
-    if (typeof window === "undefined") return;
-    const pane = document.getElementById("assembly-components-pane");
-    if (!pane) return;
-
-    const printWindow = window.open("", "_blank", "noopener,noreferrer");
-    if (!printWindow) {
-      setError("Popup blocked. Allow popups to print this pane.");
-      return;
-    }
-
-    const itemLabel = item
-      ? `${item.sku}${item.name ? ` - ${item.name}` : ""}`
-      : "Item";
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Assembly components - ${itemLabel}</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 20px; color: #0f172a; }
-      h1 { font-size: 18px; margin: 0 0 12px; }
-      table { width: 100%; border-collapse: collapse; font-size: 12px; }
-      th, td { border: 1px solid #cbd5e1; padding: 6px 8px; }
-      th { text-align: left; background: #f1f5f9; }
-      a { color: inherit; text-decoration: none; }
-    </style>
-  </head>
-  <body>
-    <h1>Assembly components (from procedures) - ${itemLabel}</h1>
-    ${pane.innerHTML}
-  </body>
-</html>`;
-
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => {
-      printWindow.print();
-      printWindow.close();
-    }, 150);
-  }, [item]);
-
   const assemblyRowsByProcedure = useMemo(() => {
     const m = new Map<string, AssemblyComponentRow[]>();
     for (const row of assemblyComponents) {
@@ -1016,6 +972,221 @@ export default function ItemDetailPage() {
     }
     return m;
   }, [assemblyComponents]);
+
+  const handlePrintAssemblyComponents = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+
+    const itemLabel = item
+      ? `${item.sku}${item.name ? ` - ${item.name}` : ""}`
+      : "Item";
+
+    const procIds = (
+      assemblyProcedureOrder.length
+        ? assemblyProcedureOrder
+        : [...assemblyRowsByProcedure.keys()]
+    ).filter((procId) => (assemblyRowsByProcedure.get(procId) ?? []).length > 0);
+
+    const sectionsHtml =
+      procIds.length === 0
+        ? "<p>No procedures found that build this item.</p>"
+        : procIds
+            .map((procId) => {
+              const rows = assemblyRowsByProcedure.get(procId) ?? [];
+              if (!rows.length) return "";
+              const head = rows[0];
+              const procLabel = head.procedure_code
+                ? `${head.procedure_code} - ${head.procedure_name}`
+                : head.procedure_name || "Procedure";
+              const byType = new Map<string, AssemblyComponentRow[]>();
+              for (const r of rows) {
+                const typeLabel = r.item_type_name || "Uncategorized";
+                const arr = byType.get(typeLabel) ?? [];
+                arr.push(r);
+                byType.set(typeLabel, arr);
+              }
+              const typeLabels = [...byType.keys()].sort((a, b) => {
+                if (a === "Uncategorized" && b !== "Uncategorized") return 1;
+                if (b === "Uncategorized" && a !== "Uncategorized") return -1;
+                return a.localeCompare(b);
+              });
+              const bodyHtml = typeLabels
+                .map((typeLabel) => {
+                  const typeRows = [...(byType.get(typeLabel) ?? [])].sort((a, b) =>
+                    (a.item_sku || "").localeCompare(b.item_sku || ""),
+                  );
+                  const typeHeader = `<tr><td colspan="5" class="type">${escapeHtml(typeLabel)}</td></tr>`;
+                  const rowsHtml = typeRows
+                    .map((r) => {
+                      const unit = r.unit_cost != null ? `$${r.unit_cost.toFixed(4)}` : "-";
+                      const total = r.line_total_cost != null ? `$${r.line_total_cost.toFixed(2)}` : "-";
+                      return `<tr>
+<td>${escapeHtml(r.item_sku || "-")}</td>
+<td>${escapeHtml(r.item_name || "-")}</td>
+<td class="num">${r.quantity_required}</td>
+<td class="num">${unit}</td>
+<td class="num">${total}</td>
+</tr>`;
+                    })
+                    .join("");
+                  return `${typeHeader}${rowsHtml}`;
+                })
+                .join("");
+              const assemblyTotal = rows.reduce((sum, r) => {
+                if (r.line_total_cost == null) return sum;
+                return sum + r.line_total_cost;
+              }, 0);
+              const hasAnyLineCost = rows.some((r) => r.line_total_cost != null);
+              return `<section class="proc">
+<h2>${escapeHtml(procLabel)}</h2>
+<table>
+<thead>
+<tr><th>SKU</th><th>Name</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr>
+</thead>
+<tbody>${bodyHtml}</tbody>
+</table>
+<div class="total"><span>Assembly total cost</span><strong>${hasAnyLineCost ? `$${assemblyTotal.toFixed(2)}` : "-"}</strong></div>
+</section>`;
+            })
+            .join("");
+
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Assembly components - ${escapeHtml(itemLabel)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; color: #0f172a; }
+    h1 { font-size: 18px; margin: 0 0 14px; }
+    h2 { font-size: 14px; margin: 0 0 8px; }
+    .proc { margin-bottom: 18px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; vertical-align: top; }
+    th { text-align: left; background: #f1f5f9; }
+    .num { text-align: right; }
+    .type { background: #f8fafc; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; font-size: 11px; }
+    .total { margin-top: 8px; display: flex; justify-content: flex-end; gap: 10px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Assembly components (from procedures) - ${escapeHtml(itemLabel)}</h1>
+  ${sectionsHtml}
+</body>
+</html>`;
+
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument;
+    const win = iframe.contentWindow;
+    if (!doc || !win) {
+      iframe.remove();
+      setError("Unable to open print preview.");
+      return;
+    }
+
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    win.focus();
+    setTimeout(() => {
+      win.print();
+      setTimeout(() => iframe.remove(), 800);
+    }, 250);
+  }, [item, assemblyProcedureOrder, assemblyRowsByProcedure]);
+
+  const handleExportAssemblyComponents = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const procIds = (
+      assemblyProcedureOrder.length
+        ? assemblyProcedureOrder
+        : [...assemblyRowsByProcedure.keys()]
+    ).filter((procId) => (assemblyRowsByProcedure.get(procId) ?? []).length > 0);
+
+    const csvEscape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const rows: string[][] = [];
+    rows.push([
+      "Procedure",
+      "Item Type",
+      "SKU",
+      "Name",
+      "Qty",
+      "Unit Cost",
+      "Line Total",
+    ]);
+
+    procIds.forEach((procId) => {
+      const procRows = assemblyRowsByProcedure.get(procId) ?? [];
+      if (!procRows.length) return;
+      const head = procRows[0];
+      const procLabel = head.procedure_code
+        ? `${head.procedure_code} - ${head.procedure_name}`
+        : head.procedure_name || "Procedure";
+      const total = procRows.reduce((sum, r) => {
+        if (r.line_total_cost == null) return sum;
+        return sum + r.line_total_cost;
+      }, 0);
+      const hasAnyCost = procRows.some((r) => r.line_total_cost != null);
+
+      const sorted = [...procRows].sort((a, b) => {
+        const byType = (a.item_type_name || "Uncategorized").localeCompare(
+          b.item_type_name || "Uncategorized",
+        );
+        if (byType !== 0) return byType;
+        return (a.item_sku || "").localeCompare(b.item_sku || "");
+      });
+
+      sorted.forEach((r) => {
+        rows.push([
+          procLabel,
+          r.item_type_name || "Uncategorized",
+          r.item_sku || "",
+          r.item_name || "",
+          String(r.quantity_required ?? ""),
+          r.unit_cost != null ? r.unit_cost.toFixed(4) : "",
+          r.line_total_cost != null ? r.line_total_cost.toFixed(2) : "",
+        ]);
+      });
+
+      rows.push([
+        `${procLabel} total`,
+        "",
+        "",
+        "",
+        "",
+        "",
+        hasAnyCost ? total.toFixed(2) : "",
+      ]);
+      rows.push(["", "", "", "", "", "", ""]);
+    });
+
+    const csv = rows.map((r) => r.map((c) => csvEscape(c)).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const base = item?.sku?.trim() || "item";
+    a.href = url;
+    a.download = `${base}-assembly-components.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [item, assemblyProcedureOrder, assemblyRowsByProcedure]);
 
   const baseCost = getCostFromTransactions(
     purchaseTxs.map((t) => ({ unit_cost: t.unit_cost, qty_change: t.qty_change })),
@@ -2634,13 +2805,22 @@ export default function ItemDetailPage() {
           <h2 className="text-sm font-semibold text-slate-200">
             Assembly components (from procedures)
           </h2>
-          <button
-            type="button"
-            onClick={handlePrintAssemblyComponents}
-            className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
-          >
-            Print pane
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportAssemblyComponents}
+              className="rounded border border-emerald-700 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-900/40"
+            >
+              Export CSV
+            </button>
+            <button
+              type="button"
+              onClick={handlePrintAssemblyComponents}
+              className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
+            >
+              Print pane
+            </button>
+          </div>
         </div>
         {assemblyComponents.length === 0 ? (
           <p className="text-sm text-slate-500">

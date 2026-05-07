@@ -69,6 +69,22 @@ export async function assembleFromProcedure(
     (inputs as { item_id: string; quantity_required: number }[] | null) ?? [];
 
   const { costType, useLandedCost: useLanded, userId } = opts;
+  const inputItemIds = [...new Set(inputRows.map((r) => r.item_id).filter(Boolean))];
+  const manualCostByItem = new Map<string, number | null>();
+  if (inputItemIds.length > 0) {
+    const { data: manualRows } = await supabase
+      .from("items")
+      .select("id, manual_unit_cost")
+      .in("id", inputItemIds);
+    for (const r of manualRows ?? []) {
+      manualCostByItem.set(
+        r.id as string,
+        (r as any).manual_unit_cost != null
+          ? Number((r as any).manual_unit_cost)
+          : null,
+      );
+    }
+  }
 
   let mergedCostTotal = 0;
 
@@ -102,7 +118,11 @@ export async function assembleFromProcedure(
       qty_change: t.qty_change,
     }));
 
-    const unitCost = getCostFromTransactions(mapped, costType) ?? 0;
+    const manualUnitCost = manualCostByItem.get(input.item_id);
+    const unitCost =
+      manualUnitCost != null
+        ? manualUnitCost
+        : (getCostFromTransactions(mapped, costType) ?? 0);
     mergedCostTotal += qtyConsumed * unitCost;
 
     const { error: conErr } = await supabase.from("inventory_transactions").insert({

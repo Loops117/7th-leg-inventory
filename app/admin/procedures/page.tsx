@@ -400,12 +400,17 @@ export default function AdminProceduresPage() {
       const useLanded = Boolean((settings as any)?.use_landed_cost);
       const { data: itemRows } = await supabase
         .from("items")
-        .select("id, sku")
+        .select("id, sku, manual_unit_cost")
         .eq("company_id", activeCompanyId)
         .in("sku", skus);
       const skuById = new Map<string, string>();
+      const manualBySku = new Map<string, number | null>();
       const ids = (itemRows ?? []).map((r: any) => {
         skuById.set(r.id, r.sku);
+        manualBySku.set(
+          r.sku as string,
+          r.manual_unit_cost != null ? Number(r.manual_unit_cost) : null,
+        );
         return r.id as string;
       });
       if (!ids.length) {
@@ -427,6 +432,11 @@ export default function AdminProceduresPage() {
       grouped.forEach((arr, itemId) => {
         const sku = skuById.get(itemId);
         if (!sku) return;
+        const manual = manualBySku.get(sku);
+        if (manual != null) {
+          bySku[sku] = manual;
+          return;
+        }
         const mapped = arr.map((t) => ({
           qty_change: Number(t.qty_change ?? 0),
           unit_cost: useLanded && t.landed_unit_cost != null ? t.landed_unit_cost : t.unit_cost,

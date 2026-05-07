@@ -947,7 +947,7 @@ export default function WorkOrderTreePage() {
         key={node.id}
         className={`min-w-0 rounded border border-slate-800 bg-slate-950/80 px-2 py-1 text-[10px] text-slate-100 ${glowClass}`}
       >
-        <div className="font-semibold text-emerald-300 truncate max-w-[8rem]" title={node.work_order?.name ?? "Work order"}>
+        <div className="font-semibold text-[14.5px] text-emerald-300 whitespace-nowrap" title={node.work_order?.name ?? "Work order"}>
           {node.work_order?.name ?? "Work order"}
         </div>
         <div className="text-[9px] text-slate-400">
@@ -1461,58 +1461,132 @@ function ConnectorOptionsPanel({
   const curve = connectorDraft?.treeId === tree.id ? connectorDraft.curve : (tree.connector_curve ?? 0.5);
   const color = connectorDraft?.treeId === tree.id ? connectorDraft.color : (tree.connector_color ?? "#64748b");
   const brightness = connectorDraft?.treeId === tree.id ? connectorDraft.brightness : (tree.connector_brightness ?? 100);
+  const [openPicker, setOpenPicker] = useState<null | "weight" | "curve" | "color" | "brightness">(null);
+  const setDraft = useCallback((next: { strokeWidth: number; curve: number; color: string; brightness: number }) => {
+    setConnectorDraft({ treeId: tree.id, ...next });
+  }, [setConnectorDraft, tree.id]);
+  const clampedWeight = Math.min(8, Math.max(0.5, strokeWidth));
+  const clampedCurve = Math.min(2, Math.max(0, curve));
+  const clampedBrightness = Math.min(100, Math.max(0, brightness));
   return (
     <div className="rounded border border-slate-700 bg-slate-900/50 p-2 text-[11px]">
       <div className="mb-1 font-medium text-slate-300">Connector style</div>
       <div className="flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-1">
-          <span className="text-slate-500">Weight</span>
-          <input
-            type="number"
-            min={0.5}
-            max={8}
-            step={0.5}
-            value={strokeWidth}
-            onChange={(e) => setConnectorDraft({ treeId: tree.id, strokeWidth: Number(e.target.value), curve, color, brightness })}
-            className="w-14 rounded border border-slate-700 bg-black/60 px-1 py-0.5"
-          />
-        </label>
-        <label className="flex items-center gap-1">
-          <span className="text-slate-500">Curve</span>
-          <input
-            type="number"
-            min={0}
-            max={2}
-            step={0.1}
-            value={curve}
-            onChange={(e) => setConnectorDraft({ treeId: tree.id, strokeWidth, curve: Number(e.target.value), color, brightness })}
-            className="w-14 rounded border border-slate-700 bg-black/60 px-1 py-0.5"
-          />
-        </label>
-        <label className="flex items-center gap-1">
-          <span className="text-slate-500">Color</span>
-          <input
-            type="text"
-            value={color}
-            onChange={(e) => setConnectorDraft({ treeId: tree.id, strokeWidth, curve, color: e.target.value, brightness })}
-            className="w-24 rounded border border-slate-700 bg-black/60 px-1 py-0.5 font-mono"
-          />
-        </label>
-        <label className="flex items-center gap-1">
-          <span className="text-slate-500">Brightness %</span>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={brightness}
-            onChange={(e) => setConnectorDraft({ treeId: tree.id, strokeWidth, curve, color, brightness: Number(e.target.value) })}
-            className="w-14 rounded border border-slate-700 bg-black/60 px-1 py-0.5"
-          />
-        </label>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setOpenPicker((p) => (p === "weight" ? null : "weight"))}
+            className="rounded border border-slate-700 bg-black/60 px-2 py-1 text-left text-slate-200 hover:bg-slate-800"
+          >
+            Weight: {clampedWeight.toFixed(1)}
+          </button>
+          {openPicker === "weight" && (
+            <div className="absolute left-0 z-20 mt-1 w-56 rounded border border-slate-700 bg-slate-950 p-2 shadow-xl">
+              <div className="mb-2 flex items-center justify-between text-slate-300">
+                <span>Line weight</span>
+                <span className="tabular-nums">{clampedWeight.toFixed(1)}</span>
+              </div>
+              <input
+                type="range"
+                min={0.5}
+                max={8}
+                step={0.1}
+                value={clampedWeight}
+                onChange={(e) => setDraft({ strokeWidth: Number(e.target.value), curve: clampedCurve, color, brightness: clampedBrightness })}
+                className="w-full"
+              />
+              <div className="mt-2 rounded border border-slate-700 bg-slate-900 px-2 py-3">
+                <div
+                  className="w-full rounded"
+                  style={{ height: `${Math.max(1, clampedWeight * 2)}px`, backgroundColor: color }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setOpenPicker((p) => (p === "curve" ? null : "curve"))}
+            className="rounded border border-slate-700 bg-black/60 px-2 py-1 text-left text-slate-200 hover:bg-slate-800"
+          >
+            Curve: {clampedCurve.toFixed(1)}
+          </button>
+          {openPicker === "curve" && (
+            <div className="absolute left-0 z-20 mt-1 w-56 rounded border border-slate-700 bg-slate-950 p-2 shadow-xl">
+              <div className="mb-2 flex items-center justify-between text-slate-300">
+                <span>Curve</span>
+                <span className="tabular-nums">{clampedCurve.toFixed(1)}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.05}
+                value={clampedCurve}
+                onChange={(e) => setDraft({ strokeWidth: clampedWeight, curve: Number(e.target.value), color, brightness: clampedBrightness })}
+                className="w-full"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setOpenPicker((p) => (p === "color" ? null : "color"))}
+            className="flex items-center gap-2 rounded border border-slate-700 bg-black/60 px-2 py-1 text-left text-slate-200 hover:bg-slate-800"
+          >
+            <span
+              className="inline-block h-3 w-3 rounded border border-slate-500"
+              style={{ backgroundColor: color }}
+            />
+            <span className="font-mono">{color}</span>
+          </button>
+          {openPicker === "color" && (
+            <div className="absolute left-0 z-20 mt-1 w-56 rounded border border-slate-700 bg-slate-950 p-2 shadow-xl">
+              <div className="mb-2 text-slate-300">Line color</div>
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => setDraft({ strokeWidth: clampedWeight, curve: clampedCurve, color: e.target.value, brightness: clampedBrightness })}
+                className="h-8 w-full rounded border border-slate-700 bg-black/60"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setOpenPicker((p) => (p === "brightness" ? null : "brightness"))}
+            className="rounded border border-slate-700 bg-black/60 px-2 py-1 text-left text-slate-200 hover:bg-slate-800"
+          >
+            Brightness: {clampedBrightness}%
+          </button>
+          {openPicker === "brightness" && (
+            <div className="absolute left-0 z-20 mt-1 w-56 rounded border border-slate-700 bg-slate-950 p-2 shadow-xl">
+              <div className="mb-2 flex items-center justify-between text-slate-300">
+                <span>Brightness</span>
+                <span className="tabular-nums">{clampedBrightness}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={clampedBrightness}
+                onChange={(e) => setDraft({ strokeWidth: clampedWeight, curve: clampedCurve, color, brightness: Number(e.target.value) })}
+                className="w-full"
+              />
+            </div>
+          )}
+        </div>
         <button
           type="button"
           disabled={savingConnector}
-          onClick={() => saveConnectorOptions(tree.id, { connector_stroke_width: strokeWidth, connector_curve: curve, connector_color: color, connector_brightness: brightness })}
+          onClick={() => saveConnectorOptions(tree.id, { connector_stroke_width: clampedWeight, connector_curve: clampedCurve, connector_color: color, connector_brightness: clampedBrightness })}
           className="rounded border border-emerald-700 bg-emerald-900/50 px-2 py-0.5 text-emerald-200 hover:bg-emerald-800 disabled:opacity-50"
         >
           {savingConnector ? "Saving…" : "Save"}
@@ -1561,20 +1635,29 @@ function TreeCanvas({
   const brightness = Math.min(100, Math.max(0, tree.connector_brightness ?? 100));
   const strokeOpacity = brightness / 100;
 
-  const NODE_WIDTH = 140;
+  const NODE_MIN_WIDTH = 140;
+  const NODE_MAX_WIDTH = 420;
   const NODE_HEIGHT = 64;
   const PADDING = 80;
+  const getNodeWidth = useCallback((node: TreeNodeWithRelations) => {
+    const label = (node.work_order?.name ?? "Work order").trim();
+    const estimated = Math.max(NODE_MIN_WIDTH, Math.ceil(label.length * 9 + 36));
+    return Math.min(NODE_MAX_WIDTH, estimated);
+  }, []);
 
   const bbox = useMemo(() => {
     let minX = 0, minY = 0, maxX = 0, maxY = 0;
-    positions.forEach(({ x, y }) => {
-      minX = Math.min(minX, x - NODE_WIDTH / 2);
-      minY = Math.min(minY, y - NODE_HEIGHT / 2);
-      maxX = Math.max(maxX, x + NODE_WIDTH / 2);
-      maxY = Math.max(maxY, y + NODE_HEIGHT / 2);
-    });
+    for (const node of tree.nodes) {
+      const pos = positions.get(node.id);
+      if (!pos) continue;
+      const halfW = getNodeWidth(node) / 2;
+      minX = Math.min(minX, pos.x - halfW);
+      minY = Math.min(minY, pos.y - NODE_HEIGHT / 2);
+      maxX = Math.max(maxX, pos.x + halfW);
+      maxY = Math.max(maxY, pos.y + NODE_HEIGHT / 2);
+    }
     return { minX: minX - PADDING, minY: minY - PADDING, maxX: maxX + PADDING, maxY: maxY + PADDING };
-  }, [positions]);
+  }, [positions, tree.nodes, getNodeWidth]);
 
   const fitToView = useCallback(() => {
     if (!containerRef.current || positions.size === 0) return;
@@ -1727,7 +1810,8 @@ function TreeCanvas({
               const isDragging = dragging?.nodeId === node.id;
               const drawX = pos.x + (isDragging ? dragOffset.dx : 0);
               const drawY = pos.y + (isDragging ? dragOffset.dy : 0);
-              const halfW = NODE_WIDTH / 2;
+              const nodeWidth = getNodeWidth(node);
+              const halfW = nodeWidth / 2;
               return (
                 <div
                   key={node.id}
@@ -1736,7 +1820,7 @@ function TreeCanvas({
                   style={{
                     left: drawX - halfW,
                     top: drawY - NODE_HEIGHT / 2,
-                    width: NODE_WIDTH,
+                    width: nodeWidth,
                     height: NODE_HEIGHT,
                   }}
                   onMouseDown={(e) => e.stopPropagation()}

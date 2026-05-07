@@ -9,6 +9,22 @@ import { getCostFromTransactions, type CostType } from "@/lib/cost";
 import { chunkArray, fetchAllInPages } from "@/lib/supabasePaginate";
 
 const IN_QUERY_CHUNK = 400;
+const CHUNK_CONCURRENCY = 6;
+
+async function fetchChunkedWithConcurrency<TChunk, TRow>(
+  chunks: TChunk[],
+  worker: (chunk: TChunk) => Promise<TRow[]>,
+  concurrency = CHUNK_CONCURRENCY,
+): Promise<TRow[]> {
+  if (!chunks.length) return [];
+  const out: TRow[] = [];
+  for (let i = 0; i < chunks.length; i += concurrency) {
+    const slice = chunks.slice(i, i + concurrency);
+    const rows = await Promise.all(slice.map((chunk) => worker(chunk)));
+    rows.forEach((r) => out.push(...r));
+  }
+  return out;
+}
 
 const ITEMS_COLUMN_KEYS = ["sku", "name", "category", "type", "incoming", "quantity", "price", "cost", "locations", "actions"] as const;
 const COLUMN_LABELS: Record<string, string> = {
@@ -153,18 +169,29 @@ export default function ItemsPage() {
       setCompanyName(active.name);
       setActiveCompanyId(active.id);
 
-      const { data: catData } = await supabase.from("item_categories").select("id, name").eq("company_id", active.id).eq("is_active", true).order("name");
+      const [{ data: catData }, { data: typeData }, { data: ctData }] =
+        await Promise.all([
+          supabase
+            .from("item_categories")
+            .select("id, name")
+            .eq("company_id", active.id)
+            .eq("is_active", true)
+            .order("name"),
+          supabase
+            .from("item_types")
+            .select("id, name, track_inventory")
+            .eq("company_id", active.id)
+            .order("name"),
+          supabase.from("item_category_types").select("category_id, type_id"),
+        ]);
       setCategories((catData ?? []) as { id: string; name: string }[]);
-
-      const { data: typeData } = await supabase
-        .from("item_types")
-        .select("id, name, track_inventory")
-        .eq("company_id", active.id)
-        .order("name");
-      setProductTypes((typeData ?? []) as { id: string; name: string; track_inventory: boolean }[]);
-      const { data: ctData } = await supabase
-        .from("item_category_types")
-        .select("category_id, type_id");
+      setProductTypes(
+        (typeData ?? []) as {
+          id: string;
+          name: string;
+          track_inventory: boolean;
+        }[],
+      );
       setCategoryTypes((ctData ?? []) as { category_id: string; type_id: string }[]);
 
       const itemsSelect =
@@ -181,15 +208,19 @@ export default function ItemsPage() {
       setItems(itemsData as Item[]);
 
       const ids = itemsData.map((i) => i.id);
+      const itemIdSet = new Set(ids);
+      const idChunks = chunkArray(ids, IN_QUERY_CHUNK);
       if (ids.length > 0) {
-        const ilMerged: ItemLocation[] = [];
-        for (const idChunk of chunkArray(ids, IN_QUERY_CHUNK)) {
-          const { data: ilData } = await supabase
-            .from("item_locations")
-            .select("item_id, location_id, is_default")
-            .in("item_id", idChunk);
-          ilMerged.push(...((ilData ?? []) as ItemLocation[]));
-        }
+        const ilMerged = await fetchChunkedWithConcurrency<string[], ItemLocation>(
+          idChunks,
+          async (idChunk) => {
+            const { data: ilData } = await supabase
+              .from("item_locations")
+              .select("item_id, location_id, is_default")
+              .in("item_id", idChunk);
+            return (ilData ?? []) as ItemLocation[];
+          },
+        );
         setItemLocations(ilMerged);
       } else {
         setItemLocations([]);
@@ -230,16 +261,22 @@ export default function ItemsPage() {
           unit_cost: number | null;
           landed_unit_cost?: number | null;
         };
-        const txList: InvTxAgg[] = [];
-        for (const idChunk of chunkArray(ids, IN_QUERY_CHUNK)) {
-          const { data: txs } = await supabase
-            .from("inventory_transactions")
-            .select("item_id, qty_change, unit_cost, landed_unit_cost")
-            .eq("company_id", active.id)
-            .in("item_id", idChunk)
-            .in("transaction_type", ["purchase_receipt", "work_order_completion", "inventory_adjustment"]);
-          txList.push(...((txs ?? []) as InvTxAgg[]));
-        }
+        const txList = await fetchChunkedWithConcurrency<string[], InvTxAgg>(
+          idChunks,
+          async (idChunk) => {
+            const { data: txs } = await supabase
+              .from("inventory_transactions")
+              .select("item_id, qty_change, unit_cost, landed_unit_cost")
+              .eq("company_id", active.id)
+              .in("item_id", idChunk)
+              .in("transaction_type", [
+                "purchase_receipt",
+                "work_order_completion",
+                "inventory_adjustment",
+              ]);
+            return (txs ?? []) as InvTxAgg[];
+          },
+        );
         const byItem = new Map<string, typeof txList>();
         for (const t of txList) {
           if (!byItem.has(t.item_id)) byItem.set(t.item_id, []);
@@ -264,30 +301,35 @@ export default function ItemsPage() {
         if (orderIds.length > 0) {
           const orderChunks =
             orderIds.length > IN_QUERY_CHUNK ? chunkArray(orderIds, IN_QUERY_CHUNK) : [orderIds];
-          for (const oc of orderChunks) {
-            for (const ic of chunkArray(ids, IN_QUERY_CHUNK)) {
-              const { data: lines } = await supabase
-                .from("receiving_order_lines")
-                .select("item_id, quantity_ordered, quantity_received, pieces_per_pack")
-                .in("receiving_order_id", oc)
-                .in("item_id", ic);
-              (lines ?? []).forEach(
-                (row: {
-                  item_id: string;
-                  quantity_ordered?: number;
-                  quantity_received?: number;
-                  pieces_per_pack?: number;
-                }) => {
-                  const ord = Number(row.quantity_ordered ?? 0);
-                  const recv = Number(row.quantity_received ?? 0);
-                  const remPacks = Math.max(0, ord - recv);
-                  const packSize = Number(row.pieces_per_pack ?? 1) || 1;
-                  const remPieces = remPacks * packSize;
-                  incomingMap[row.item_id] = (incomingMap[row.item_id] ?? 0) + remPieces;
-                },
-              );
+          const allLines = await fetchChunkedWithConcurrency<
+            string[],
+            {
+              item_id: string;
+              quantity_ordered?: number;
+              quantity_received?: number;
+              pieces_per_pack?: number;
             }
-          }
+          >(orderChunks, async (oc) => {
+            const { data: lines } = await supabase
+              .from("receiving_order_lines")
+              .select("item_id, quantity_ordered, quantity_received, pieces_per_pack")
+              .in("receiving_order_id", oc);
+            return (lines ?? []) as {
+              item_id: string;
+              quantity_ordered?: number;
+              quantity_received?: number;
+              pieces_per_pack?: number;
+            }[];
+          });
+          allLines.forEach((row) => {
+            if (!itemIdSet.has(row.item_id)) return;
+            const ord = Number(row.quantity_ordered ?? 0);
+            const recv = Number(row.quantity_received ?? 0);
+            const remPacks = Math.max(0, ord - recv);
+            const packSize = Number(row.pieces_per_pack ?? 1) || 1;
+            const remPieces = remPacks * packSize;
+            incomingMap[row.item_id] = (incomingMap[row.item_id] ?? 0) + remPieces;
+          });
         }
       }
 
@@ -318,58 +360,64 @@ export default function ItemsPage() {
     }
   }, [filterTypeId, typesForFilterCategory]);
 
-  const filteredItems = items.filter((item) => {
-    if (filterCategoryId && item.item_category_id !== filterCategoryId) return false;
-    if (filterTypeId && item.item_type_id !== filterTypeId) return false;
-    if (filterCatalog === "catalog" && !item.is_catalog_item) return false;
-    if (filterCatalog === "stock" && item.is_catalog_item) return false;
-    if (filterActive === "active" && item.is_active === false) return false;
-    if (filterActive === "inactive" && item.is_active !== false) return false;
-    if (searchTerm.trim()) {
-      const q = searchTerm.toLowerCase();
-      const cat = item.item_categories?.name ?? "";
-      const type = item.item_types?.name ?? item.item_type ?? "";
-      const activeState = item.is_active === false ? "inactive" : "active";
-      const haystack = `${item.sku} ${item.name} ${cat} ${type} ${activeState}`.toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
-    return true;
-  });
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) => {
+        if (filterCategoryId && item.item_category_id !== filterCategoryId) return false;
+        if (filterTypeId && item.item_type_id !== filterTypeId) return false;
+        if (filterCatalog === "catalog" && !item.is_catalog_item) return false;
+        if (filterCatalog === "stock" && item.is_catalog_item) return false;
+        if (filterActive === "active" && item.is_active === false) return false;
+        if (filterActive === "inactive" && item.is_active !== false) return false;
+        if (searchTerm.trim()) {
+          const q = searchTerm.toLowerCase();
+          const cat = item.item_categories?.name ?? "";
+          const type = item.item_types?.name ?? item.item_type ?? "";
+          const activeState = item.is_active === false ? "inactive" : "active";
+          const haystack = `${item.sku} ${item.name} ${cat} ${type} ${activeState}`.toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+        return true;
+      }),
+    [items, filterCategoryId, filterTypeId, filterCatalog, filterActive, searchTerm],
+  );
 
-  const sortedItems = [...filteredItems].sort((a, b) => {
-    const dir = sortDir === "asc" ? 1 : -1;
-    const getCategory = (it: Item) => it.item_categories?.name ?? "";
-    const getType = (it: Item) => it.item_types?.name ?? it.item_type ?? "";
-    let av: string | number = "";
-    let bv: string | number = "";
-    if (sortKey === "sku") {
-      av = a.sku || "";
-      bv = b.sku || "";
-    } else if (sortKey === "name") {
-      av = a.name || "";
-      bv = b.name || "";
-    } else if (sortKey === "category") {
-      av = getCategory(a);
-      bv = getCategory(b);
-    } else if (sortKey === "type") {
-      av = getType(a);
-      bv = getType(b);
-    } else if (sortKey === "incoming") {
-      av = incomingByItem[a.id] ?? 0;
-      bv = incomingByItem[b.id] ?? 0;
-    } else if (sortKey === "quantity") {
-      av = quantityByItem[a.id] ?? 0;
-      bv = quantityByItem[b.id] ?? 0;
-    } else if (sortKey === "price") {
-      av = a.sale_price ?? 0;
-      bv = b.sale_price ?? 0;
-    } else if (sortKey === "cost") {
-      av = costByItem[a.id] ?? 0;
-      bv = costByItem[b.id] ?? 0;
-    }
-    if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
-    return String(av).localeCompare(String(bv)) * dir;
-  });
+  const sortedItems = useMemo(() => {
+    return [...filteredItems].sort((a, b) => {
+      const dir = sortDir === "asc" ? 1 : -1;
+      const getCategory = (it: Item) => it.item_categories?.name ?? "";
+      const getType = (it: Item) => it.item_types?.name ?? it.item_type ?? "";
+      let av: string | number = "";
+      let bv: string | number = "";
+      if (sortKey === "sku") {
+        av = a.sku || "";
+        bv = b.sku || "";
+      } else if (sortKey === "name") {
+        av = a.name || "";
+        bv = b.name || "";
+      } else if (sortKey === "category") {
+        av = getCategory(a);
+        bv = getCategory(b);
+      } else if (sortKey === "type") {
+        av = getType(a);
+        bv = getType(b);
+      } else if (sortKey === "incoming") {
+        av = incomingByItem[a.id] ?? 0;
+        bv = incomingByItem[b.id] ?? 0;
+      } else if (sortKey === "quantity") {
+        av = quantityByItem[a.id] ?? 0;
+        bv = quantityByItem[b.id] ?? 0;
+      } else if (sortKey === "price") {
+        av = a.sale_price ?? 0;
+        bv = b.sale_price ?? 0;
+      } else if (sortKey === "cost") {
+        av = costByItem[a.id] ?? 0;
+        bv = costByItem[b.id] ?? 0;
+      }
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+  }, [filteredItems, sortDir, sortKey, incomingByItem, quantityByItem, costByItem]);
 
   function toggleSort(
     key: "sku" | "name" | "category" | "type" | "incoming" | "quantity" | "price" | "cost",
@@ -581,14 +629,14 @@ export default function ItemsPage() {
       )}
 
       {!needCompany && activeCompanyId && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-slate-800 bg-slate-900/50 p-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div>
+        <div className="flex flex-col gap-3 rounded border border-slate-800 bg-slate-900/50 p-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
+            <div className="min-w-0">
             <label className="block text-xs text-slate-500">Category</label>
             <select
               value={filterCategoryId}
               onChange={(e) => setFilterCategoryId(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 sm:min-w-[11rem]"
             >
               <option value="">All categories</option>
               {categories.map((c) => (
@@ -596,12 +644,12 @@ export default function ItemsPage() {
               ))}
             </select>
             </div>
-            <div>
+            <div className="min-w-0">
             <label className="block text-xs text-slate-500">Type</label>
             <select
               value={filterTypeId}
               onChange={(e) => setFilterTypeId(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 sm:min-w-[11rem]"
             >
               <option value="">All types</option>
               {typesForFilterCategory.map((t) => (
@@ -609,41 +657,41 @@ export default function ItemsPage() {
               ))}
             </select>
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs text-slate-500">Catalog</label>
               <select
                 value={filterCatalog}
                 onChange={(e) => setFilterCatalog(e.target.value as "all" | "catalog" | "stock")}
-                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 sm:min-w-[9rem]"
               >
                 <option value="all">All</option>
                 <option value="catalog">Catalog only</option>
                 <option value="stock">Stock only</option>
               </select>
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs text-slate-500">Status</label>
               <select
                 value={filterActive}
                 onChange={(e) => setFilterActive(e.target.value as "all" | "active" | "inactive")}
-                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 sm:min-w-[9rem]"
               >
                 <option value="all">All</option>
                 <option value="active">Active only</option>
                 <option value="inactive">Inactive only</option>
               </select>
             </div>
-            <div>
+            <div className="min-w-0 sm:col-span-2 lg:col-span-1">
               <label className="block text-xs text-slate-500">Search</label>
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="SKU, name, category, type…"
-                className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 w-52"
+                className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 sm:min-w-[14rem] lg:min-w-[16rem]"
               />
             </div>
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-1">
             <button
               type="button"
               onClick={() => { setFilterCategoryId(""); setFilterTypeId(""); setFilterCatalog("all"); setFilterActive("all"); }}
@@ -653,7 +701,7 @@ export default function ItemsPage() {
             </button>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="relative" data-column-picker-trigger>
               <button
                 type="button"
@@ -703,8 +751,8 @@ export default function ItemsPage() {
       )}
 
       {!loading && !error && filteredItems.length > 0 && (
-        <div className="overflow-y-auto max-h-[35rem] rounded border border-slate-800">
-          <table className="w-full border-collapse text-sm">
+        <div className="themed-scrollbar max-h-[35rem] overflow-x-auto overflow-y-auto rounded border border-slate-800">
+          <table className="min-w-[860px] w-full border-collapse text-sm">
             <thead className="sticky top-0 z-[1] bg-slate-900">
               <tr className="border-b border-slate-800 text-left text-slate-400">
                 <th className="py-2 pr-3">

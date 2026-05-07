@@ -27,14 +27,33 @@ export function getCostFromTransactions(
     const last = withCostPositive[withCostPositive.length - 1];
     return last?.unit_cost ?? null;
   }
-  // average: include all transactions with unit_cost (incl. adjustments with negative qty)
-  // so that "reset cost" (adjustment to 0 with unit_cost 0) can bring totalQty to 0
-  const withCost = transactions.filter((t) => t.unit_cost != null);
-  let totalCost = 0;
-  let totalQty = 0;
-  for (const t of withCost) {
-    totalCost += (t.unit_cost ?? 0) * t.qty_change;
-    totalQty += t.qty_change;
+  // average: keep the last known moving-average cost even when on-hand qty reaches 0.
+  // This prevents display cost from being wiped by depletion and allows the next
+  // positive receipt to recalculate from fresh incoming cost.
+  let onHandQty = 0;
+  let avgCost: number | null = null;
+  for (const t of transactions) {
+    const qty = Number(t.qty_change ?? 0);
+    if (!qty) continue;
+    const unitCost = t.unit_cost != null ? Number(t.unit_cost) : null;
+    if (qty > 0) {
+      // Incoming inventory with known cost: update weighted moving average.
+      if (unitCost != null) {
+        if (onHandQty <= 0 || avgCost == null) {
+          avgCost = unitCost;
+          onHandQty = qty;
+        } else {
+          const nextQty = onHandQty + qty;
+          avgCost = ((avgCost * onHandQty) + (unitCost * qty)) / nextQty;
+          onHandQty = nextQty;
+        }
+      } else {
+        onHandQty += qty;
+      }
+    } else {
+      onHandQty += qty;
+      if (onHandQty < 0) onHandQty = 0;
+    }
   }
-  return totalQty > 0 ? totalCost / totalQty : null;
+  return avgCost;
 }

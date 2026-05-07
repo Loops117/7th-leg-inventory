@@ -963,6 +963,50 @@ export default function ItemDetailPage() {
     });
   };
 
+  const handlePrintAssemblyComponents = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const pane = document.getElementById("assembly-components-pane");
+    if (!pane) return;
+
+    const printWindow = window.open("", "_blank", "noopener,noreferrer");
+    if (!printWindow) {
+      setError("Popup blocked. Allow popups to print this pane.");
+      return;
+    }
+
+    const itemLabel = item
+      ? `${item.sku}${item.name ? ` - ${item.name}` : ""}`
+      : "Item";
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Assembly components - ${itemLabel}</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; color: #0f172a; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { border: 1px solid #cbd5e1; padding: 6px 8px; }
+      th { text-align: left; background: #f1f5f9; }
+      a { color: inherit; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <h1>Assembly components (from procedures) - ${itemLabel}</h1>
+    ${pane.innerHTML}
+  </body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 150);
+  }, [item]);
+
   const assemblyRowsByProcedure = useMemo(() => {
     const m = new Map<string, AssemblyComponentRow[]>();
     for (const row of assemblyComponents) {
@@ -2582,10 +2626,22 @@ export default function ItemDetailPage() {
       </section>
 
       {/* Assembly components from procedures */}
-      <section className="rounded border border-slate-800 bg-slate-900/50 p-4">
-        <h2 className="mb-2 text-sm font-semibold text-slate-200">
-          Assembly components (from procedures)
-        </h2>
+      <section
+        id="assembly-components-pane"
+        className="rounded border border-slate-800 bg-slate-900/50 p-4"
+      >
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-200">
+            Assembly components (from procedures)
+          </h2>
+          <button
+            type="button"
+            onClick={handlePrintAssemblyComponents}
+            className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
+          >
+            Print pane
+          </button>
+        </div>
         {assemblyComponents.length === 0 ? (
           <p className="text-sm text-slate-500">
             No procedures found that build this item.
